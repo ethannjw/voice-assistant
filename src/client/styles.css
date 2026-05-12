@@ -1,0 +1,349 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #111318;
+  color: #eef1f4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 42%),
+    #111318;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  min-height: 40px;
+  border: 1px solid #343946;
+  border-radius: 7px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #1c2028;
+  color: #f3f5f7;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+button.primary {
+  border-color: #2d6cdf;
+  background: #2d6cdf;
+}
+
+button.danger {
+  border-color: #d34b4b;
+  background: #642728;
+}
+
+input,
+select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #343946;
+  border-radius: 7px;
+  padding: 0 14px;
+  background: #151922;
+  color: #f7f8fa;
+  outline: none;
+}
+
+input:focus,
+select:focus {
+  border-color: #6a8df2;
+}
+
+select {
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #c6ccd6 50%),
+    linear-gradient(135deg, #c6ccd6 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) 18px,
+    calc(100% - 12px) 18px;
+  background-size:
+    6px 6px,
+    6px 6px;
+  background-repeat: no-repeat;
+  padding-right: 36px;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 42vw);
+}
+
+.workspace-panel,
+.patch-panel {
+  min-width: 0;
+  padding: 28px;
+}
+
+.workspace-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.patch-panel {
+  border-left: 1px solid #2a2f3a;
+  background: #151820;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.topbar,
+.patch-panel header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: #9fa7b5;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+h1,
+h2 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+h1 {
+  font-size: 30px;
+  line-height: 1.1;
+}
+
+h2 {
+  font-size: 20px;
+}
+
+.status-pill,
+.patch-id {
+  border: 1px solid #343946;
+  border-radius: 999px;
+  padding: 6px 10px;
+  color: #c7cfdb;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.status-pill.connected {
+  border-color: #3fa66b;
+  color: #9af0bd;
+}
+
+.status-pill.error {
+  border-color: #d34b4b;
+  color: #ffb1b1;
+}
+
+.workspace-strip {
+  min-height: 42px;
+  border: 1px solid #2d3340;
+  border-radius: 7px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #c5ccd8;
+  background: #171b23;
+  overflow: hidden;
+}
+
+.project-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #2d3340;
+  border-radius: 7px;
+  background: #151922;
+}
+
+.project-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.project-heading h2 {
+  font-size: 18px;
+}
+
+.project-row,
+.project-add-row {
+  display: grid;
+  gap: 10px;
+}
+
+.project-add-row {
+  grid-template-columns: minmax(140px, 0.7fr) minmax(220px, 1.3fr) auto;
+}
+
+.project-add-row button {
+  white-space: nowrap;
+}
+
+.project-error {
+  margin: 0;
+  color: #ffb1b1;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.workspace-strip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.controls,
+.patch-actions,
+.prompt-row {
+  display: flex;
+  gap: 10px;
+}
+
+.controls {
+  flex-wrap: wrap;
+}
+
+.prompt-row {
+  align-items: center;
+}
+
+.prompt-row button {
+  width: 48px;
+  padding: 0;
+  flex: 0 0 48px;
+}
+
+.conversation {
+  flex: 1;
+  min-height: 420px;
+  border: 1px solid #2d3340;
+  border-radius: 7px;
+  background: #151922;
+  overflow: auto;
+  padding: 14px;
+}
+
+.message {
+  margin: 0 0 12px;
+  padding: 12px;
+  border-radius: 7px;
+  background: #1c212b;
+  border-left: 3px solid #4b5567;
+}
+
+.message.user {
+  border-left-color: #6a8df2;
+}
+
+.message.assistant {
+  border-left-color: #3fa66b;
+}
+
+.message.tool {
+  border-left-color: #d59a3c;
+}
+
+.message span {
+  display: block;
+  margin-bottom: 6px;
+  color: #aab3c2;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.message p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.empty-state {
+  min-height: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed #39404d;
+  border-radius: 7px;
+  color: #9fa7b5;
+  text-align: center;
+  padding: 20px;
+}
+
+.diff-view {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid #2d3340;
+  border-radius: 7px;
+  background: #0f1217;
+  color: #dbe2ec;
+  overflow: auto;
+  white-space: pre;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+@media (max-width: 920px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .patch-panel {
+    border-left: 0;
+    border-top: 1px solid #2a2f3a;
+    min-height: 480px;
+  }
+}
+
+@media (max-width: 560px) {
+  .workspace-panel,
+  .patch-panel {
+    padding: 18px;
+  }
+
+  .topbar,
+  .patch-panel header {
+    flex-direction: column;
+  }
+
+  .controls button {
+    flex: 1 1 140px;
+  }
+
+  .project-add-row {
+    grid-template-columns: 1fr;
+  }
+}
