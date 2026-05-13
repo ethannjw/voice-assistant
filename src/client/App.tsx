@@ -14,7 +14,14 @@ import {
   Trash2
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { AppConfig, PendingPatch, ProjectConfig, ToolResult } from "../shared/contracts";
+import type {
+  AppConfig,
+  CodexApprovalDecision,
+  CodexApprovalRequest,
+  PendingPatch,
+  ProjectConfig,
+  ToolResult
+} from "../shared/contracts";
 
 type LogEntry = {
   id: string;
@@ -83,7 +90,9 @@ export function App() {
   const [input, setInput] = useState("");
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [pendingPatch, setPendingPatch] = useState<PendingPatch | null>(null);
+  const [codexApprovals, setCodexApprovals] = useState<CodexApprovalRequest[]>([]);
   const [isApplying, setIsApplying] = useState(false);
+  const [isResolvingApprovalId, setIsResolvingApprovalId] = useState<string | null>(null);
   const [isDataChannelOpen, setIsDataChannelOpen] = useState(false);
   const [isTextSubmitting, setIsTextSubmitting] = useState(false);
   const [isDiscoveringProjects, setIsDiscoveringProjects] = useState(false);
@@ -102,6 +111,14 @@ export function App() {
   useEffect(() => {
     void refreshConfig();
     void fetchPendingPatch();
+    void fetchCodexApprovals();
+  }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void fetchCodexApprovals();
+    }, 1500);
+    return () => window.clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -345,6 +362,7 @@ export function App() {
       projects: data.projects as ProjectConfig[]
     }));
     setPendingPatch(null);
+    setCodexApprovals([]);
     addLog("system", `Working in ${data.activeProject.path}`);
   }
 
@@ -369,6 +387,7 @@ export function App() {
       projects: data.projects as ProjectConfig[]
     }));
     setPendingPatch(null);
+    setCodexApprovals([]);
     addLog("system", "No project selected. Voice chat remains available.");
   }
 
@@ -400,6 +419,7 @@ export function App() {
       projects: data.projects as ProjectConfig[]
     }));
     setPendingPatch(null);
+    setCodexApprovals([]);
     addLog("system", `Added project ${data.activeProject.path}`);
   }
 
@@ -547,6 +567,41 @@ export function App() {
     setPendingPatch(data.patch);
   }
 
+  async function fetchCodexApprovals() {
+    try {
+      const response = await fetch("/api/codex/approvals");
+      const data = (await response.json()) as { approvals?: CodexApprovalRequest[] };
+      if (response.ok) {
+        setCodexApprovals(data.approvals ?? []);
+      }
+    } catch {
+      // Approval polling should not interrupt the main voice/text flow.
+    }
+  }
+
+  async function resolveCodexApproval(approval: CodexApprovalRequest, decision: CodexApprovalDecision) {
+    setIsResolvingApprovalId(approval.id);
+    try {
+      const response = await fetch(`/api/codex/approvals/${encodeURIComponent(approval.id)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision })
+      });
+      const data = (await response.json().catch(() => ({}))) as { error?: string };
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "Failed to resolve approval.");
+      }
+
+      setCodexApprovals((current) => current.filter((candidate) => candidate.id !== approval.id));
+      addLog("system", `${approval.title} ${decision === "decline" ? "declined" : "approved"}.`);
+    } catch (error) {
+      addLog("system", error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsResolvingApprovalId(null);
+    }
+  }
+
   async function applyPendingPatch() {
     if (!pendingPatch) {
       return;
@@ -588,6 +643,7 @@ function addLog(role: LogEntry["role"], text: string) {
   const isConnected = status === "connected";
   const canSendText = input.trim().length > 0 && !isTextSubmitting;
   const hasProject = Boolean(config?.activeProject);
+  const activeApproval = codexApprovals[0] ?? null;
 
   return (
     <main className="app-shell">
@@ -775,12 +831,85 @@ function addLog(role: LogEntry["role"], text: string) {
         <header>
           <div>
             <p className="eyebrow">Human approval required</p>
-            <h2>Pending patch</h2>
+            <h2>{activeApproval ? "Codex approval" : "Pending patch"}</h2>
           </div>
-          {pendingPatch ? <span className="patch-id">{pendingPatch.id.slice(0, 8)}</span> : null}
+          {activeApproval ? (
+            <span className="patch-id">{codexApprovals.length}</span>
+          ) : pendingPatch ? (
+            <span className="patch-id">{pendingPatch.id.slice(0, 8)}</span>
+          ) : null}
         </header>
 
-        {pendingPatch ? (
+        {activeApproval ? (
+          <>
+            <div className="approval-card">
+              <div className="approval-meta">
+                <span>{formatApprovalKind(activeApproval.kind)}</span>
+                <time>{new Date(activeApproval.createdAt).toLocaleTimeString()}</time>
+              </div>
+              <h3>{activeApproval.title}</h3>
+              {activeApproval.reason ? <p>{activeApproval.reason}</p> : null}
+              {activeApproval.cwd ? (
+                <div className="approval-field">
+                  <span>cwd</span>
+                  <code>{activeApproval.cwd}</code>
+                </div>
+              ) : null}
+              {activeApproval.grantRoot ? (
+                <div className="approval-field">
+                  <span>root</span>
+                  <code>{activeApproval.grantRoot}</code>
+                </div>
+              ) : null}
+              {activeApproval.command ? (
+                <pre className="approval-command">{activeApproval.command}</pre>
+              ) : null}
+            </div>
+            {activeApproval.diff ? (
+              <div className="diff-frame">
+                <pre className="diff-view">{activeApproval.diff}</pre>
+              </div>
+            ) : null}
+            <div className="patch-actions">
+              {activeApproval.availableDecisions.includes("accept") ? (
+                <button
+                  className="primary"
+                  type="button"
+                  onClick={() => {
+                    void resolveCodexApproval(activeApproval, "accept");
+                  }}
+                  disabled={isResolvingApprovalId === activeApproval.id}
+                >
+                  <Check size={18} />
+                  Approve
+                </button>
+              ) : null}
+              {activeApproval.availableDecisions.includes("acceptForSession") ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void resolveCodexApproval(activeApproval, "acceptForSession");
+                  }}
+                  disabled={isResolvingApprovalId === activeApproval.id}
+                >
+                  <Check size={18} />
+                  Session
+                </button>
+              ) : null}
+              <button
+                className="danger"
+                type="button"
+                onClick={() => {
+                  void resolveCodexApproval(activeApproval, "decline");
+                }}
+                disabled={isResolvingApprovalId === activeApproval.id}
+              >
+                <Trash2 size={18} />
+                Decline
+              </button>
+            </div>
+          </>
+        ) : pendingPatch ? (
           <>
             <div className="diff-frame">
               <pre className="diff-view">{pendingPatch.diff}</pre>
@@ -797,7 +926,7 @@ function addLog(role: LogEntry["role"], text: string) {
             </div>
           </>
         ) : (
-          <div className="empty-state">No patches in queue — model proposals will surface here</div>
+          <div className="empty-state">No approvals in queue — Codex requests will surface here</div>
         )}
       </aside>
     </main>
@@ -948,4 +1077,12 @@ function makeDistortionCurve(amount: number) {
 
 function isVoiceStyleId(value: string | null): value is VoiceStyleId {
   return VOICE_STYLES.some((style) => style.id === value);
+}
+
+function formatApprovalKind(kind: CodexApprovalRequest["kind"]) {
+  if (kind === "command" || kind === "legacy_command") {
+    return "command";
+  }
+
+  return "file change";
 }

@@ -839,6 +839,76 @@ h2 {
   flex: 0 0 44px;
 }
 
+/* ========== APPROVALS ========== */
+
+.approval-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line-bright);
+  background: var(--bg-recess);
+}
+
+.approval-card h3,
+.approval-card p {
+  margin: 0;
+}
+
+.approval-card h3 {
+  font-size: 18px;
+}
+
+.approval-card p {
+  color: var(--ink-mute);
+  line-height: 1.5;
+}
+
+.approval-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--amber);
+  font-family: var(--display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.approval-field {
+  display: grid;
+  gap: 6px;
+}
+
+.approval-field span {
+  color: var(--ink-faint);
+  font-family: var(--display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.approval-field code,
+.approval-command {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.approval-command {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+}
+
 /* ========== CONVERSATION ========== */
 
 .conversation-frame {

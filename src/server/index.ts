@@ -4,7 +4,7 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer as createViteServer } from "vite";
-import type { AppConfig, ToolName } from "../shared/contracts";
+import type { AppConfig, CodexApprovalDecision, ToolName } from "../shared/contracts";
 import { CodexAppServer } from "./codexAppServer";
 import { ProjectStore } from "./projectStore";
 import { WorkspaceTools } from "./tools";
@@ -118,6 +118,25 @@ app.post("/api/codex/message", async (req, res) => {
   }
 });
 
+app.get("/api/codex/approvals", (_req, res) => {
+  res.json({ approvals: codexAppServer.listPendingApprovals() });
+});
+
+app.post("/api/codex/approvals/:id", (req, res) => {
+  const decision = req.body?.decision;
+  if (!isApprovalDecision(decision)) {
+    res.status(400).json({ error: "Unsupported approval decision." });
+    return;
+  }
+
+  if (!codexAppServer.resolveApproval(req.params.id, decision)) {
+    res.status(404).json({ error: "Approval request not found." });
+    return;
+  }
+
+  res.json({ ok: true });
+});
+
 app.post("/api/tools/:name", async (req, res) => {
   const result = await tools.call(req.params.name as ToolName, req.body ?? {});
   res.status(result.ok ? 200 : 400).json(result);
@@ -226,4 +245,8 @@ function shouldSkipDirectory(name: string) {
 
 function uniquePaths(paths: string[]) {
   return [...new Set(paths.map((candidate) => path.resolve(candidate)))];
+}
+
+function isApprovalDecision(value: unknown): value is CodexApprovalDecision {
+  return value === "accept" || value === "acceptForSession" || value === "decline";
 }

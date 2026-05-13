@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { CodexApprovalDecision, CodexApprovalRequest } from "../shared/contracts";
 
 type RpcId = number;
 
@@ -21,6 +22,11 @@ type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+};
+
+type PendingApproval = {
+  messageId: RpcId;
+  request: CodexApprovalRequest;
 };
 
 type ThreadSession = {
@@ -47,6 +53,8 @@ export class CodexAppServer {
   private stderrBuffer = "";
   private initializePromise: Promise<void> | null = null;
   private readonly pendingRequests = new Map<RpcId, PendingRequest>();
+  private readonly pendingApprovals = new Map<string, PendingApproval>();
+  private readonly pendingFileDiffs = new Map<string, string>();
   private readonly notificationListeners = new Set<(message: RpcMessage) => void>();
   private readonly threadSessions = new Map<string, Promise<ThreadSession>>();
   private activeRealtimeThreadId: string | null = null;
@@ -147,6 +155,21 @@ export class CodexAppServer {
     } finally {
       unsubscribe();
     }
+  }
+
+  listPendingApprovals() {
+    return [...this.pendingApprovals.values()].map((approval) => approval.request);
+  }
+
+  resolveApproval(id: string, decision: CodexApprovalDecision) {
+    const approval = this.pendingApprovals.get(id);
+    if (!approval) {
+      return false;
+    }
+
+    this.pendingApprovals.delete(id);
+    this.writeApprovalResponse(approval, decision);
+    return true;
   }
 
   private async getThreadSession(projectPath: string | null) {
@@ -306,6 +329,7 @@ export class CodexAppServer {
     }
 
     if (message.method) {
+      this.captureNotification(message);
       for (const listener of this.notificationListeners) {
         listener(message);
       }
@@ -339,17 +363,22 @@ export class CodexAppServer {
     }
 
     if (message.method === "item/commandExecution/requestApproval") {
-      this.write({ id: message.id, result: { decision: "decline" } });
+      this.queueApproval(message, buildCommandApproval(message));
       return;
     }
 
     if (message.method === "item/fileChange/requestApproval") {
-      this.write({ id: message.id, result: { decision: "decline" } });
+      this.queueApproval(message, buildFileChangeApproval(message, this.pendingFileDiffs));
       return;
     }
 
-    if (message.method === "applyPatchApproval" || message.method === "execCommandApproval") {
-      this.write({ id: message.id, result: { decision: "denied" } });
+    if (message.method === "execCommandApproval") {
+      this.queueApproval(message, buildLegacyCommandApproval(message));
+      return;
+    }
+
+    if (message.method === "applyPatchApproval") {
+      this.queueApproval(message, buildLegacyFileApproval(message));
       return;
     }
 
@@ -364,6 +393,71 @@ export class CodexAppServer {
         code: -32601,
         message: `Unsupported Codex App Server request: ${message.method}`
       }
+    });
+  }
+
+  private captureNotification(message: RpcMessage) {
+    if (message.method !== "item/fileChange/patchUpdated") {
+      return;
+    }
+
+    const params = message.params ?? {};
+    const itemId = typeof params.itemId === "string" ? params.itemId : "";
+    const changes = Array.isArray(params.changes) ? params.changes : [];
+    if (!itemId || !changes.length) {
+      return;
+    }
+
+    const diff = changes
+      .map((change) => {
+        if (!change || typeof change !== "object") {
+          return "";
+        }
+
+        const pathLabel = "path" in change && typeof change.path === "string" ? `# ${change.path}\n` : "";
+        const content = "diff" in change && typeof change.diff === "string" ? change.diff : "";
+        return `${pathLabel}${content}`.trim();
+      })
+      .filter(Boolean)
+      .join("\n\n");
+
+    if (!diff) {
+      return;
+    }
+
+    this.pendingFileDiffs.set(itemId, diff);
+    for (const approval of this.pendingApprovals.values()) {
+      if (approval.request.kind === "file_change" && approval.request.id.startsWith(`file_change:${itemId}:`)) {
+        approval.request.diff = diff;
+      }
+    }
+  }
+
+  private queueApproval(message: RpcMessage, request: CodexApprovalRequest) {
+    if (message.id === undefined) {
+      return;
+    }
+
+    this.pendingApprovals.set(request.id, {
+      messageId: message.id,
+      request
+    });
+  }
+
+  private writeApprovalResponse(approval: PendingApproval, decision: CodexApprovalDecision) {
+    if (approval.request.kind === "legacy_command" || approval.request.kind === "legacy_file_change") {
+      this.write({
+        id: approval.messageId,
+        result: {
+          decision: decision === "decline" ? "denied" : decision === "acceptForSession" ? "approved_for_session" : "approved"
+        }
+      });
+      return;
+    }
+
+    this.write({
+      id: approval.messageId,
+      result: { decision }
     });
   }
 
@@ -403,7 +497,95 @@ export class CodexAppServer {
       pending.reject(error);
       this.pendingRequests.delete(id);
     }
+
+    this.pendingApprovals.clear();
+    this.pendingFileDiffs.clear();
   }
+}
+
+function buildCommandApproval(message: RpcMessage): CodexApprovalRequest {
+  const params = message.params ?? {};
+  const command = typeof params.command === "string" ? params.command : null;
+  const cwd = typeof params.cwd === "string" ? params.cwd : null;
+  const itemId = typeof params.itemId === "string" ? params.itemId : String(message.id ?? "");
+  const approvalId = typeof params.approvalId === "string" ? params.approvalId : null;
+
+  return {
+    id: `command:${approvalId ?? itemId}:${message.id}`,
+    kind: "command",
+    title: "Command execution",
+    reason: typeof params.reason === "string" ? params.reason : null,
+    command,
+    cwd,
+    grantRoot: null,
+    diff: null,
+    availableDecisions: getAvailableDecisions(params.availableDecisions),
+    createdAt: new Date().toISOString()
+  };
+}
+
+function buildFileChangeApproval(message: RpcMessage, pendingFileDiffs: Map<string, string>): CodexApprovalRequest {
+  const params = message.params ?? {};
+  const itemId = typeof params.itemId === "string" ? params.itemId : String(message.id ?? "");
+  const grantRoot = typeof params.grantRoot === "string" ? params.grantRoot : null;
+
+  return {
+    id: `file_change:${itemId}:${message.id}`,
+    kind: "file_change",
+    title: "File change",
+    reason: typeof params.reason === "string" ? params.reason : null,
+    command: null,
+    cwd: null,
+    grantRoot,
+    diff: pendingFileDiffs.get(itemId) ?? null,
+    availableDecisions: ["accept", "acceptForSession", "decline"],
+    createdAt: new Date().toISOString()
+  };
+}
+
+function buildLegacyCommandApproval(message: RpcMessage): CodexApprovalRequest {
+  const params = message.params ?? {};
+  return {
+    id: `legacy_command:${message.id}`,
+    kind: "legacy_command",
+    title: "Command execution",
+    reason: typeof params.reason === "string" ? params.reason : null,
+    command: typeof params.command === "string" ? params.command : null,
+    cwd: typeof params.cwd === "string" ? params.cwd : null,
+    grantRoot: null,
+    diff: null,
+    availableDecisions: ["accept", "decline"],
+    createdAt: new Date().toISOString()
+  };
+}
+
+function buildLegacyFileApproval(message: RpcMessage): CodexApprovalRequest {
+  const params = message.params ?? {};
+  return {
+    id: `legacy_file_change:${message.id}`,
+    kind: "legacy_file_change",
+    title: "Patch application",
+    reason: typeof params.reason === "string" ? params.reason : null,
+    command: null,
+    cwd: null,
+    grantRoot: null,
+    diff: typeof params.patch === "string" ? params.patch : null,
+    availableDecisions: ["accept", "decline"],
+    createdAt: new Date().toISOString()
+  };
+}
+
+function getAvailableDecisions(value: unknown): CodexApprovalDecision[] {
+  if (!Array.isArray(value)) {
+    return ["accept", "acceptForSession", "decline"];
+  }
+
+  const decisions = value.filter(isSupportedDecision);
+  return decisions.length ? decisions : ["accept", "decline"];
+}
+
+function isSupportedDecision(value: unknown): value is CodexApprovalDecision {
+  return value === "accept" || value === "acceptForSession" || value === "decline";
 }
 
 async function ensureNoProjectWorkspace(configuredPath?: string) {
