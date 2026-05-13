@@ -65,7 +65,7 @@ const statusLabels: Record<string, string> = {
 };
 
 const VOICE_STYLES: VoiceStyle[] = [
-  { id: "natural", name: "Natural", detail: "Clean realtime voice" },
+  { id: "natural", name: "Natural", detail: "Clean Codex voice" },
   { id: "console_ai", name: "Console AI", detail: "Tight radio band" },
   { id: "starship", name: "Starship", detail: "Wide command deck" },
   { id: "synthetic", name: "Synthetic", detail: "Crisp machine tone" },
@@ -85,6 +85,7 @@ export function App() {
   const [pendingPatch, setPendingPatch] = useState<PendingPatch | null>(null);
   const [isApplying, setIsApplying] = useState(false);
   const [isDataChannelOpen, setIsDataChannelOpen] = useState(false);
+  const [isTextSubmitting, setIsTextSubmitting] = useState(false);
   const [isDiscoveringProjects, setIsDiscoveringProjects] = useState(false);
   const [projectCandidates, setProjectCandidates] = useState<ProjectCandidate[]>([]);
   const [projectError, setProjectError] = useState("");
@@ -149,7 +150,7 @@ export function App() {
       dc.onopen = () => {
         setIsDataChannelOpen(true);
         setStatus("connected");
-        addLog("system", "Realtime session connected. Try: 'inspect this repo'.");
+        addLog("system", "Codex App Server realtime session connected. Try: 'inspect this repo'.");
       };
       dc.onclose = () => {
         setIsDataChannelOpen(false);
@@ -164,7 +165,7 @@ export function App() {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      const sdpResponse = await fetch("/api/realtime/call", {
+      const sdpResponse = await fetch("/api/codex/realtime/call", {
         method: "POST",
         body: offer.sdp,
         headers: {
@@ -191,6 +192,7 @@ export function App() {
   }
 
   function disconnect() {
+    void fetch("/api/codex/realtime/stop", { method: "POST" });
     dcRef.current?.close();
     pcRef.current?.close();
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -429,30 +431,53 @@ export function App() {
     setMuted(nextMuted);
   }
 
-  function sendText() {
+  async function sendText() {
     const text = input.trim();
-    if (!text || !dcRef.current || dcRef.current.readyState !== "open") {
+    if (!text || isTextSubmitting) {
       return;
     }
 
-    dcRef.current.send(
-      JSON.stringify({
-        type: "conversation.item.create",
-        item: {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text }]
-        }
-      })
-    );
-    dcRef.current.send(JSON.stringify({ type: "response.create" }));
     addLog("user", text);
     setInput("");
+
+    if (dcRef.current?.readyState === "open") {
+      dcRef.current.send(
+        JSON.stringify({
+          type: "conversation.item.create",
+          item: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text }]
+          }
+        })
+      );
+      dcRef.current.send(JSON.stringify({ type: "response.create" }));
+      return;
+    }
+
+    setIsTextSubmitting(true);
+    try {
+      const response = await fetch("/api/codex/message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text })
+      });
+      const data = (await response.json()) as { text?: string; error?: string };
+      if (!response.ok) {
+        throw new Error(data.error ?? "Codex App Server text turn failed.");
+      }
+
+      addLog("assistant", data.text || "(no response)");
+    } catch (error) {
+      addLog("system", error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsTextSubmitting(false);
+    }
   }
 
   async function handleRealtimeEvent(event: RealtimeEvent) {
     if (event.type === "error") {
-      addLog("system", event.error?.message ?? "Realtime API error.");
+      addLog("system", event.error?.message ?? "Codex App Server realtime error.");
       return;
     }
 
@@ -561,7 +586,7 @@ function addLog(role: LogEntry["role"], text: string) {
   }
 
   const isConnected = status === "connected";
-  const canSendText = input.trim().length > 0 && isDataChannelOpen;
+  const canSendText = input.trim().length > 0 && !isTextSubmitting;
   const hasProject = Boolean(config?.activeProject);
 
   return (

@@ -5,8 +5,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer as createViteServer } from "vite";
 import type { AppConfig, ToolName } from "../shared/contracts";
+import { CodexAppServer } from "./codexAppServer";
 import { ProjectStore } from "./projectStore";
-import { buildSessionConfig } from "./realtime";
 import { WorkspaceTools } from "./tools";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -18,21 +18,23 @@ const defaultWorkspaceRoot = path.resolve(process.env.WORKSPACE_ROOT ?? process.
 const projectStorePath = path.resolve(
   process.env.PROJECTS_FILE ?? path.join(process.cwd(), ".voice-pair-programmer", "projects.json")
 );
-const realtimeModel = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2";
 const voice = process.env.OPENAI_REALTIME_VOICE ?? "marin";
 const projectStore = new ProjectStore(projectStorePath, defaultWorkspaceRoot);
 await projectStore.load();
 const tools = new WorkspaceTools(projectStore.getActiveProject()?.path ?? null);
+const codexAppServer = new CodexAppServer({
+  noProjectWorkspace: process.env.NO_PROJECT_WORKSPACE,
+  voice
+});
 const isProduction = process.env.NODE_ENV === "production";
 
-app.use("/api/realtime/call", express.text({ type: ["application/sdp", "text/plain"] }));
+app.use("/api/codex/realtime/call", express.text({ type: ["application/sdp", "text/plain"] }));
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/config", (_req, res) => {
   const config: AppConfig = {
     activeProject: projectStore.getActiveProject(),
     projects: projectStore.listProjects(),
-    realtimeModel,
     voice
   };
   res.json(config);
@@ -88,35 +90,32 @@ app.post("/api/projects/:id/select", async (req, res) => {
   }
 });
 
-app.post("/api/realtime/call", async (req, res) => {
-  if (!process.env.OPENAI_API_KEY) {
-    res.status(500).send("OPENAI_API_KEY is required.");
+app.post("/api/codex/realtime/call", async (req, res) => {
+  try {
+    const sdp = await codexAppServer.startRealtimeSession(projectStore.getActiveProject()?.path ?? null, req.body);
+    res.status(200).type("application/sdp").send(sdp);
+  } catch (error) {
+    res.status(500).send(error instanceof Error ? error.message : String(error));
+  }
+});
+
+app.post("/api/codex/realtime/stop", async (_req, res) => {
+  await codexAppServer.stopRealtimeSession();
+  res.status(204).end();
+});
+
+app.post("/api/codex/message", async (req, res) => {
+  const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+  if (!text) {
+    res.status(400).json({ error: "Text is required." });
     return;
   }
 
-  const fd = new FormData();
-  fd.set("sdp", req.body);
-  fd.set("session", JSON.stringify(buildSessionConfig(realtimeModel, voice)));
-
-  const response = await fetch("https://api.openai.com/v1/realtime/calls", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      "OpenAI-Safety-Identifier": "local-dev-user"
-    },
-    body: fd
-  });
-
-  const text = await response.text();
-  if (!response.ok) {
-    res
-      .status(response.status)
-      .type(response.headers.get("content-type") ?? "application/json")
-      .send(text);
-    return;
+  try {
+    res.json(await codexAppServer.runTextTurn(projectStore.getActiveProject()?.path ?? null, text));
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
   }
-
-  res.status(response.status).type("application/sdp").send(text);
 });
 
 app.post("/api/tools/:name", async (req, res) => {
@@ -155,7 +154,8 @@ if (isProduction) {
 app.listen(port, () => {
   console.log(`Voice Pair Programmer server listening on http://localhost:${port}`);
   console.log(`Workspace root: ${tools.getWorkspaceRoot() ?? "(none selected)"}`);
-  console.log(`Realtime model: ${realtimeModel}`);
+  console.log(`Realtime voice: ${voice}`);
+  console.log("Codex App Server: enabled");
 });
 
 async function discoverRepositories() {

@@ -240,7 +240,7 @@ select {
 }
 
 .app-shell::before {
-  content: "VPP-001 / REALTIME / OPENAI / GPT-REALTIME-2";
+  content: "VPP-001 / CODEX APP SERVER / REALTIME VOICE";
   position: fixed;
   bottom: 8px;
   left: 50%;

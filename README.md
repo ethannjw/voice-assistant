@@ -1,10 +1,10 @@
 # Voice Pair Programmer
 
-ブラウザのマイクから OpenAI **Realtime API (`gpt-realtime-2`)** に直接接続し、ローカルリポジトリを音声で読み取り・調査・パッチ提案できる **Codex App Server スタイルの検証用プロトタイプ**です。
+ブラウザのマイクから公式 **Codex App Server** に接続し、ローカルリポジトリを音声またはテキストで調査・実装できる検証用プロトタイプです。
 
-ファイル変更はすべて UI 上での **人間の承認** を経てから適用されるため、安心して試せます。
+プロジェクト未選択でも会話だけを試せます。実装やリポジトリ調査を行う場合は、先にローカル Git リポジトリをプロジェクトとして選択します。
 
-> 🔬 これは検証用リポジトリです。実プロダクトではなく、Codex App Server パターンと GPT-Realtime-2 を組み合わせたときの操作感・実装パターンを確かめることを目的にしています。
+> 🔬 これは検証用リポジトリです。実プロダクトではなく、Codex App Server と音声 UI を組み合わせたときの操作感・実装パターンを確かめることを目的にしています。
 
 ---
 
@@ -27,18 +27,27 @@
 
 ## できること
 
-- **ブラウザ ↔ OpenAI Realtime** の双方向音声セッション (WebRTC, `/v1/realtime/calls`)
-- **ローカルワークスペース調査ツール** をモデルに公開
-  - `workspace_status` — `git status`
-  - `search_workspace` — `rg` による全文検索
-  - `read_file` — ファイル読み取り
-  - `git_diff` — ワーキングツリー差分
-  - `run_tests` — `npm test`(または `TEST_COMMAND`)実行
-  - `propose_patch` — 統一 diff のパッチ提案 (人間承認必須)
+- **ブラウザ ↔ Express ↔ `codex app-server`** の双方向音声セッション
+- **Codex App Server** によるスレッド、ターン、会話履歴、ストリーミング応答
+- **Codex による調査と回答**: プロジェクト選択後、App Server の Codex エージェントが選択リポジトリを読みながら応答
 - **テキスト入力** によるフォールバック(声を出せない場面用)
 - **Voice profile**: 5 種類のブラウザ側エフェクト(無線風、ロボ風など)
-- **パッチ承認 UI**: 提案された diff を確認してから Apply
 - **複数プロジェクト対応**: ローカル Git リポジトリを登録して切り替え
+
+### UI からのワンクリックショートカット
+
+Codex のセッションとは別に、Express がローカルで直接実行するユーティリティです。画面下部の **`INSPECT`** / **`TESTS`** ボタンや `// PATCH` パネルがこれに該当します。
+
+| ツール | 内容 | 起動 |
+| --- | --- | --- |
+| `workspace_status` | `git status` | `INSPECT` ボタン |
+| `run_tests` | `npm test`(または `TEST_COMMAND`) | `TESTS` ボタン |
+| `search_workspace` | `rg` による全文検索 | (内部 API) |
+| `read_file` | ファイル読み取り | (内部 API) |
+| `git_diff` | ワーキングツリー差分 | (内部 API) |
+| `propose_patch` | 統一 diff の保留 + 承認後 `git apply` | `// PATCH` パネル |
+
+> ℹ️ これらは **Codex から呼ばれるツールではありません**。現状は UI 側のユーティリティとして残してあるだけです。詳細は [パッチ承認フロー](#パッチ承認フロー) を参照。
 
 ---
 
@@ -48,8 +57,9 @@
 | --- | --- |
 | **Node.js 20+** | サーバー / クライアント実行 |
 | **npm** | 依存インストール |
+| **Codex CLI** | `codex app-server` の起動 |
 | **`rg` (ripgrep)** | `search_workspace` ツールに必須 |
-| **OpenAI API キー** | `gpt-realtime-2` が利用できるプロジェクト |
+| **Codex のログインまたは API キー設定** | Codex App Server の認証 |
 | **モダンブラウザ** | WebRTC + Web Audio (Chrome / Edge / Safari) |
 
 `rg` のインストール例:
@@ -60,6 +70,23 @@ brew install ripgrep
 # Ubuntu / Debian
 sudo apt install ripgrep
 ```
+
+### Codex CLI のセットアップ
+
+`npm run dev` を起動する **前に** Codex CLI の認証を済ませておきます。
+
+```bash
+# 1. Codex CLI をインストール (未インストールの場合)
+npm install -g @openai/codex
+
+# 2. ログイン (ブラウザが開きます)
+codex login
+
+# 3. 動作確認 — プロンプトが出れば認証 OK
+codex
+```
+
+`codex` を素で叩いてプロンプトが返ってくれば、`codex app-server` も同じ認証情報で動きます。API キー方式を使う場合は Codex CLI のドキュメントに従って `OPENAI_API_KEY` を設定してください。
 
 ---
 
@@ -72,7 +99,7 @@ npm install
 # 2. 環境変数ファイルを作成
 cp .env.example .env
 
-# 3. .env を編集 (最低限 OPENAI_API_KEY を入れれば動きます)
+# 3. 必要に応じて .env を編集
 $EDITOR .env
 
 # 4. 開発サーバー起動
@@ -104,25 +131,20 @@ npm run dev
 
 ## プロジェクトの追加と切り替え
 
-リポジトリ調査やパッチ提案を試すには、対象の Git リポジトリを登録する必要があります。
+リポジトリ調査や実装を試すには、対象の Git リポジトリを登録する必要があります。
 
-### A. UI から探して追加(推奨)
+### UI から探して追加
 
-1. **Active workspace** パネルの **`Find repositories`** ボタンをクリック
+1. **Current repository** パネルの **`Find repositories`** ボタンをクリック
 2. `PROJECT_SEARCH_ROOTS` で指定したディレクトリ配下から Git リポジトリを自動検出
    - 未指定の場合は、このアプリのリポジトリの親ディレクトリを検索します
 3. 一覧から選んで追加
-
-### B. パスを直接入力
-
-1. 入力欄に **プロジェクト名** と **絶対パス** を入力
-2. **`Add`** をクリック
 
 ### 切り替え
 
 セレクタから既存プロジェクトを選ぶだけ。プロジェクトを切り替えると:
 
-- 進行中の Realtime セッションは自動で **切断**
+- 進行中の Codex App Server realtime セッションは自動で **切断**
 - 未承認のパッチは **クリア**
 - 次回 `CONNECT` 時に新しいプロジェクトのコンテキストでセッションが始まる
 
@@ -132,7 +154,7 @@ npm run dev
 
 ## 音声プリセット (Voice profile)
 
-**Voice profile** パネルで、モデルからの応答音声にブラウザ側エフェクトをかけられます。Realtime API のモデル音声プリセットは変えないので、**接続中でも切り替え可能** です。
+**Voice profile** パネルで、モデルからの応答音声にブラウザ側エフェクトをかけられます。Codex App Server の realtime 音声自体は変えないので、**接続中でも切り替え可能** です。
 
 | プリセット | 雰囲気 |
 | --- | --- |
@@ -174,14 +196,24 @@ UI 下部の **`INSPECT`** / **`TESTS`** ボタンは、`workspace_status` と `
 
 ## パッチ承認フロー
 
-モデルがファイル変更を提案すると:
+### 現状: Codex はファイル変更できません
 
-1. 右側パネルの **`PENDING PATCH`** に統一 diff が表示される
-2. 内容を確認
-3. **`APPLY`** をクリック → `git apply` でワーキングツリーに適用
-4. 取り消したいときは **`DISCARD`**
+Codex App Server は、ユーザーの Codex 設定に従って **コマンド実行やファイル変更の承認リクエスト** を送ります。このプロトタイプでは App Server 用の承認 UI をまだ実装していないため、**承認リクエストはサーバー側で一律に拒否** しています。
 
-**Apply するまでファイルは一切変更されません。** これがこのプロトタイプの安全モデルの中核です。
+つまり今の構成では:
+
+- ✅ Codex がリポジトリを **読む / 検索する / 説明する** はできる
+- ❌ Codex が **ファイルを書き換える / シェルコマンドを実行する** はできない
+
+「読み取り・調査専用のペアプログラマー」として動く状態です。書き込みを試したい場合は、Codex に diff を **テキストで提案させて、自分で適用** する運用になります。
+
+### 右側の `// PATCH` パネルについて
+
+このパネルは、Codex 移行前のローカル `propose_patch` ツール用の承認 UI です。
+
+- **Codex セッションからは現在発火しません**(承認リクエストが拒否されるため)
+- 内部 API を直接叩けば動作するため、UI は残してあります
+- 将来的に App Server の承認リクエストをこのパネルに繋ぐ実装を入れれば、Codex の編集提案もここで承認できるようになります
 
 ---
 
@@ -191,10 +223,9 @@ UI 下部の **`INSPECT`** / **`TESTS`** ボタンは、`workspace_status` と `
 
 | 変数 | 必須 | 既定値 | 説明 |
 | --- | --- | --- | --- |
-| `OPENAI_API_KEY` | ✅ | — | `gpt-realtime-2` を利用できる OpenAI API キー |
-| `OPENAI_REALTIME_MODEL` |   | `gpt-realtime-2` | 利用する Realtime モデル ID |
-| `OPENAI_REALTIME_VOICE` |   | `marin` | モデル音声プリセット (`marin`, `cedar`, `alloy` など) |
-| `WORKSPACE_ROOT` |   | `process.cwd()` | 起動時の既定ワークスペース(プロジェクト未選択時のフォールバック) |
+| `OPENAI_REALTIME_VOICE` |   | `marin` | Codex App Server realtime の音声プリセット (`marin`, `cedar`, `alloy` など) |
+| `WORKSPACE_ROOT` |   | `process.cwd()` | 古い保存データの自動整理に使う既定ワークスペース |
+| `NO_PROJECT_WORKSPACE` |   | OS の一時ディレクトリ配下 | プロジェクト未選択時に Codex App Server が使う空の作業ディレクトリ |
 | `PROJECTS_FILE` |   | `.voice-pair-programmer/projects.json` | 登録済みプロジェクトの保存先 |
 | `PROJECT_SEARCH_ROOTS` |   | このリポジトリの親ディレクトリ | `Find repositories` の検索対象。`:` または `;` 区切りで複数指定可 |
 | `TEST_COMMAND` |   | `npm test` | `run_tests` ツールが実行するコマンド |
@@ -206,13 +237,13 @@ UI 下部の **`INSPECT`** / **`TESTS`** ボタンは、`workspace_status` と `
 
 ## トラブルシューティング
 
-### `CONNECT` を押すと `insufficient_quota` が出る
+### `CONNECT` を押すと Codex App Server の認証エラーが出る
 
-OpenAI 側のクレジット不足、またはプロジェクト/組織のスペンドリミットに到達しています。
+Codex CLI のログインまたは API キー設定を確認してください。
 
-1. OpenAI ダッシュボードで請求情報・残クレジット・上限額を確認
-2. 上限を上げるかクレジットを追加
-3. **`npm run dev` を再起動**(`.env` の再読込のため)
+1. ターミナルで `codex` が実行できることを確認
+2. Codex CLI の認証状態を確認
+3. **`npm run dev` を再起動**
 4. 改めて **`CONNECT`**
 
 ### マイクが認識されない
@@ -239,17 +270,18 @@ which rg
 ```mermaid
 flowchart LR
   Browser["Browser UI<br/>+ microphone"] -->|SDP offer| Server["Express<br/>App Server"]
-  Server -->|session + SDP answer| Realtime["OpenAI Realtime API<br/>gpt-realtime-2"]
-  Realtime -->|audio + events| Browser
-  Browser -->|function calls| Server
-  Server --> Tools["git / rg / fs<br/>tests / git apply"]
+  Server -->|JSONL stdio| Codex["codex app-server"]
+  Codex -->|SDP answer + streamed events| Server
+  Server -->|SDP answer| Browser
+  Codex --> Workspace["Selected project<br/>or no-project temp workspace"]
+  Browser -->|manual shortcuts| Tools["git / rg / fs<br/>tests / git apply"]
 ```
 
-- ブラウザは **SDP オファー** だけをサーバーに送る
-- サーバーが OpenAI Realtime API に対してセッションを作り、**SDP アンサー** を中継
-- 以降の音声 / イベントは WebRTC で **ブラウザ ↔ OpenAI 直結**
-- 関数呼び出し(ツール実行)はデータチャネル経由でサーバーが処理
-- **API キーはサーバー側にしか存在しない**
+- ブラウザは **SDP オファー** を Express に送る
+- Express は `codex app-server --listen stdio://` を起動し、JSONL の JSON-RPC で `initialize` / `thread/start` / `thread/realtime/start` を呼ぶ
+- App Server から返る **SDP アンサー** を Express がブラウザへ返す
+- テキストのみの送信は `turn/start` を使い、App Server の `item/agentMessage/delta` を集約して UI に表示する
+- プロジェクト未選択時は一時ディレクトリのスレッドとして起動し、実装作業は選択済みプロジェクトでのみ行う
 
 ---
 
@@ -258,7 +290,8 @@ flowchart LR
 | 操作 | 実行タイミング |
 | --- | --- |
 | 読み取り系ツール (`workspace_status`, `search_workspace`, `read_file`, `git_diff`, `run_tests`) | モデルからの呼び出しで即実行 |
-| ファイル変更 (`propose_patch`) | パッチを **保留**。UI で `APPLY` を押すまで適用されない |
+| Codex App Server のコマンド実行 / ファイル変更承認 | 現状はサーバー側で拒否 |
+| 旧ローカルツールのファイル変更 (`propose_patch`) | パッチを **保留**。UI で `APPLY` を押すまで適用されない |
 
 `run_tests` はテストコマンドを実行するため、テストが副作用を持つプロジェクトでは挙動を確認した上で利用してください。
 
@@ -269,5 +302,5 @@ flowchart LR
 ## ライセンス / 注意事項
 
 - 検証用コードのため、本番運用は想定していません
-- OpenAI Realtime API の利用料金は OpenAI 側の課金体系に従います
+- Codex / OpenAI の利用料金は利用中のアカウントとプランに従います
 - パッチ適用は `git apply` を使うため、対象は Git ワーキングツリー配下のみ
