@@ -239,12 +239,17 @@ Codex App Server は、ユーザーの Codex 設定に従って **コマンド�
 
 ### `CONNECT` を押すと Codex App Server の認証エラーが出る
 
-Codex CLI のログインまたは API キー設定を確認してください。
+Codex CLI の認証が通っていない可能性が高いです。
 
-1. ターミナルで `codex` が実行できることを確認
-2. Codex CLI の認証状態を確認
-3. **`npm run dev` を再起動**
-4. 改めて **`CONNECT`**
+1. ターミナルで `codex` を実行 → プロンプトが表示されれば認証 OK
+2. プロンプトが出ずにログインを促された場合は、`codex login` を実行してブラウザで認証
+3. `which codex` で PATH に通っていることを確認(`npm install -g @openai/codex`)
+4. **`npm run dev` を再起動**(子プロセスとして `codex app-server` を起動し直すため)
+5. 改めて **`CONNECT`**
+
+### `codex app-server` がそもそも起動しない
+
+サーバー起動時のログに `codex` の起動失敗が出ている場合、Codex CLI が古い可能性があります。`npm install -g @openai/codex@latest` で更新してください。
 
 ### マイクが認識されない
 
@@ -274,7 +279,8 @@ flowchart LR
   Codex -->|SDP answer + streamed events| Server
   Server -->|SDP answer| Browser
   Codex --> Workspace["Selected project<br/>or no-project temp workspace"]
-  Browser -->|manual shortcuts| Tools["git / rg / fs<br/>tests / git apply"]
+  Browser -->|manual shortcuts| Server
+  Server --> Tools["git / rg / fs<br/>tests / git apply"]
 ```
 
 - ブラウザは **SDP オファー** を Express に送る
