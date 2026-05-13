@@ -10,6 +10,7 @@ import {
   PhoneOff,
   Play,
   Send,
+  SlidersHorizontal,
   Trash2
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -42,6 +43,19 @@ type RealtimeEvent = {
   };
 };
 
+type VoiceStyleId = "natural" | "console_ai" | "starship" | "synthetic" | "low_orbit";
+
+type VoiceStyle = {
+  id: VoiceStyleId;
+  name: string;
+  detail: string;
+};
+
+type ProjectCandidate = {
+  name: string;
+  path: string;
+};
+
 const statusLabels: Record<string, string> = {
   idle: "Idle",
   connecting: "Connecting",
@@ -50,27 +64,60 @@ const statusLabels: Record<string, string> = {
   error: "Error"
 };
 
+const VOICE_STYLES: VoiceStyle[] = [
+  { id: "natural", name: "Natural", detail: "Clean realtime voice" },
+  { id: "console_ai", name: "Console AI", detail: "Tight radio band" },
+  { id: "starship", name: "Starship", detail: "Wide command deck" },
+  { id: "synthetic", name: "Synthetic", detail: "Crisp machine tone" },
+  { id: "low_orbit", name: "Low Orbit", detail: "Deep filtered comms" }
+];
+
 export function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [status, setStatus] = useState<keyof typeof statusLabels>("idle");
   const [muted, setMuted] = useState(false);
+  const [voiceStyle, setVoiceStyle] = useState<VoiceStyleId>(() => {
+    const saved = localStorage.getItem("voice-style");
+    return isVoiceStyleId(saved) ? saved : "natural";
+  });
   const [input, setInput] = useState("");
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [pendingPatch, setPendingPatch] = useState<PendingPatch | null>(null);
   const [isApplying, setIsApplying] = useState(false);
-  const [newProjectName, setNewProjectName] = useState("");
-  const [newProjectPath, setNewProjectPath] = useState("");
+  const [isDataChannelOpen, setIsDataChannelOpen] = useState(false);
+  const [isDiscoveringProjects, setIsDiscoveringProjects] = useState(false);
+  const [projectCandidates, setProjectCandidates] = useState<ProjectCandidate[]>([]);
   const [projectError, setProjectError] = useState("");
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const playbackAudioRef = useRef<HTMLAudioElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioCleanupRef = useRef<(() => void) | null>(null);
+  const conversationRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     void refreshConfig();
     void fetchPendingPatch();
   }, []);
+
+  useEffect(() => {
+    const node = conversationRef.current;
+    if (!node) {
+      return;
+    }
+    node.scrollTop = node.scrollHeight;
+  }, [logs]);
+
+  useEffect(() => {
+    localStorage.setItem("voice-style", voiceStyle);
+
+    if (remoteStreamRef.current) {
+      void applyVoiceStyleEffect(remoteStreamRef.current, voiceStyle);
+    }
+  }, [voiceStyle]);
 
   async function refreshConfig() {
     try {
@@ -85,13 +132,13 @@ export function App() {
     setStatus("connecting");
 
     try {
+      preparePlaybackAudio();
+      await warmVoiceEffects(voiceStyle);
       const pc = new RTCPeerConnection();
-      const audio = new Audio();
-      audio.autoplay = true;
-      audioRef.current = audio;
 
       pc.ontrack = (event) => {
-        audio.srcObject = event.streams[0];
+        const remoteStream = event.streams[0] ?? new MediaStream([event.track]);
+        void connectRemoteAudio(remoteStream, voiceStyle);
       };
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -100,11 +147,18 @@ export function App() {
 
       const dc = pc.createDataChannel("oai-events");
       dc.onopen = () => {
+        setIsDataChannelOpen(true);
         setStatus("connected");
         addLog("system", "Realtime session connected. Try: 'inspect this repo'.");
       };
-      dc.onclose = () => setStatus("disconnected");
-      dc.onerror = () => setStatus("error");
+      dc.onclose = () => {
+        setIsDataChannelOpen(false);
+        setStatus("disconnected");
+      };
+      dc.onerror = () => {
+        setIsDataChannelOpen(false);
+        setStatus("error");
+      };
       dc.onmessage = (message) => handleRealtimeEvent(JSON.parse(message.data));
 
       const offer = await pc.createOffer();
@@ -140,14 +194,132 @@ export function App() {
     dcRef.current?.close();
     pcRef.current?.close();
     streamRef.current?.getTracks().forEach((track) => track.stop());
+    cleanupRemoteAudio();
     dcRef.current = null;
     pcRef.current = null;
     streamRef.current = null;
+    remoteStreamRef.current = null;
+    setIsDataChannelOpen(false);
     setStatus("disconnected");
   }
 
+  async function connectRemoteAudio(stream: MediaStream, style: VoiceStyleId) {
+    remoteStreamRef.current = stream;
+
+    const audio = preparePlaybackAudio();
+    if (audio.srcObject !== stream) {
+      audio.srcObject = stream;
+    }
+
+    try {
+      await audio.play();
+    } catch (error) {
+      addLog("system", `Audio playback needs a browser gesture: ${String(error)}`);
+    }
+
+    await applyVoiceStyleEffect(stream, style);
+  }
+
+  function preparePlaybackAudio() {
+    const audio = playbackAudioRef.current ?? new Audio();
+    audio.autoplay = true;
+    audio.muted = false;
+    audio.volume = 1;
+    audio.setAttribute("playsinline", "true");
+    playbackAudioRef.current = audio;
+    return audio;
+  }
+
+  async function applyVoiceStyleEffect(stream: MediaStream, style: VoiceStyleId) {
+    cleanupAudioGraph();
+
+    if (style === "natural") {
+      setNativePlaybackMuted(false);
+      return;
+    }
+
+    let context: AudioContext;
+    try {
+      context = await ensureAudioContext();
+    } catch (error) {
+      setNativePlaybackMuted(false);
+      addLog("system", `Voice effects are unavailable. Using clean playback: ${String(error)}`);
+      return;
+    }
+
+    const source = context.createMediaStreamSource(stream);
+    audioCleanupRef.current = buildVoiceStyleGraph(context, source, style);
+    setNativePlaybackMuted(true);
+  }
+
+  async function warmVoiceEffects(style: VoiceStyleId) {
+    if (style === "natural") {
+      return;
+    }
+
+    try {
+      await ensureAudioContext();
+    } catch (error) {
+      addLog("system", `Voice effects are unavailable. Using clean playback: ${String(error)}`);
+    }
+  }
+
+  function setNativePlaybackMuted(muted: boolean) {
+    if (playbackAudioRef.current) {
+      playbackAudioRef.current.muted = muted;
+    }
+  }
+
+  async function ensureAudioContext() {
+    const AudioContextCtor =
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) {
+      throw new Error("Web Audio is not available in this browser.");
+    }
+
+    const context = audioContextRef.current ?? new AudioContextCtor();
+    audioContextRef.current = context;
+
+    if (context.state === "suspended") {
+      await context.resume();
+    }
+
+    return context;
+  }
+
+  function cleanupAudioGraph() {
+    audioCleanupRef.current?.();
+    audioCleanupRef.current = null;
+  }
+
+  function cleanupPlaybackAudio() {
+    if (playbackAudioRef.current) {
+      playbackAudioRef.current.muted = false;
+      playbackAudioRef.current.pause();
+      playbackAudioRef.current.srcObject = null;
+      playbackAudioRef.current = null;
+    }
+  }
+
+  function cleanupRemoteAudio() {
+    cleanupAudioGraph();
+    cleanupPlaybackAudio();
+    void audioContextRef.current?.close();
+    audioContextRef.current = null;
+  }
+
   async function selectProject(projectId: string) {
-    if (!projectId || !config || projectId === config.activeProject.id) {
+    if (!config) {
+      return;
+    }
+
+    if (!projectId) {
+      await deselectProject();
+      return;
+    }
+
+    if (projectId === config.activeProject?.id) {
       return;
     }
 
@@ -174,13 +346,31 @@ export function App() {
     addLog("system", `Working in ${data.activeProject.path}`);
   }
 
-  async function addProject() {
-    const path = newProjectPath.trim();
-    if (!path) {
-      setProjectError("Project path is required.");
+  async function deselectProject() {
+    if (isConnected) {
+      disconnect();
+      addLog("system", "Realtime session disconnected because the active project changed.");
+    }
+
+    setProjectError("");
+    const response = await fetch("/api/projects/deselect", { method: "POST" });
+    const data = await response.json();
+
+    if (!response.ok) {
+      setProjectError(String(data.error ?? "Failed to clear the active project."));
       return;
     }
 
+    setConfig((current) => ({
+      ...(current ?? data),
+      activeProject: data.activeProject as ProjectConfig | null,
+      projects: data.projects as ProjectConfig[]
+    }));
+    setPendingPatch(null);
+    addLog("system", "No project selected. Voice chat remains available.");
+  }
+
+  async function addProject(candidate: ProjectCandidate) {
     if (isConnected) {
       disconnect();
       addLog("system", "Realtime session disconnected because the active project changed.");
@@ -191,8 +381,8 @@ export function App() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: newProjectName.trim(),
-        path
+        name: candidate.name,
+        path: candidate.path
       })
     });
     const data = await response.json();
@@ -207,10 +397,28 @@ export function App() {
       activeProject: data.activeProject as ProjectConfig,
       projects: data.projects as ProjectConfig[]
     }));
-    setNewProjectName("");
-    setNewProjectPath("");
     setPendingPatch(null);
     addLog("system", `Added project ${data.activeProject.path}`);
+  }
+
+  async function discoverProjects() {
+    setProjectError("");
+    setIsDiscoveringProjects(true);
+
+    try {
+      const response = await fetch("/api/projects/discover", { method: "POST" });
+      const data = (await response.json()) as { projects?: ProjectCandidate[]; error?: string };
+      if (!response.ok) {
+        setProjectError(data.error ?? "Failed to find repositories.");
+        return;
+      }
+
+      setProjectCandidates(data.projects ?? []);
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsDiscoveringProjects(false);
+    }
   }
 
   function toggleMute() {
@@ -353,68 +561,93 @@ function addLog(role: LogEntry["role"], text: string) {
   }
 
   const isConnected = status === "connected";
+  const canSendText = input.trim().length > 0 && isDataChannelOpen;
+  const hasProject = Boolean(config?.activeProject);
 
   return (
     <main className="app-shell">
       <section className="workspace-panel">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Codex App Server + Realtime</p>
+            <p className="eyebrow">Codex App Server // Realtime Voice Link</p>
             <h1>Voice Pair Programmer</h1>
           </div>
           <div className={`status-pill ${status}`}>{statusLabels[status]}</div>
         </header>
 
-        <section className="project-panel" aria-label="Project selector">
+        <section className="project-panel" aria-label="Repository workspace">
           <div className="project-heading">
             <div>
-              <p className="eyebrow">Work in a project</p>
-              <h2>{config?.activeProject.name ?? "Loading project"}</h2>
+              <p className="eyebrow">Current repository</p>
+              <h2>{config?.activeProject?.name ?? "No project selected"}</h2>
             </div>
             <Folder size={20} />
           </div>
 
           <div className="workspace-strip">
             <Code2 size={18} />
-            <span>{config?.activeProject.path ?? "Loading workspace..."}</span>
+            <span>
+              {config?.activeProject?.path ??
+                "Voice chat is available. Select a project before using repository tools."}
+            </span>
           </div>
 
           <div className="project-row">
+            <label className="field-label" htmlFor="project-select">
+              Switch repository
+            </label>
             <select
-              value={config?.activeProject.id ?? ""}
+              id="project-select"
+              value={config?.activeProject?.id ?? ""}
               onChange={(event) => {
                 void selectProject(event.target.value);
               }}
               disabled={!config}
             >
+              <option value="">No project selected</option>
               {config?.projects.map((project) => (
                 <option key={project.id} value={project.id}>
-                  {project.name}
+                  {project.name} - {project.path}
                 </option>
               ))}
             </select>
           </div>
 
-          <div className="project-add-row">
-            <input
-              value={newProjectName}
-              onChange={(event) => setNewProjectName(event.target.value)}
-              placeholder="Project name"
-            />
-            <input
-              value={newProjectPath}
-              onChange={(event) => setNewProjectPath(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  void addProject();
-                }
-              }}
-              placeholder="/absolute/path/to/project"
-            />
-            <button type="button" onClick={addProject} disabled={!config}>
-              <FolderPlus size={18} />
-              Add
-            </button>
+          <div className="project-add-block">
+            <div className="project-add-heading">
+              <FolderPlus size={16} />
+              <span>Add local repository</span>
+            </div>
+            <div className="project-discovery-row">
+              <button type="button" onClick={discoverProjects} disabled={!config || isDiscoveringProjects}>
+                <FolderPlus size={18} />
+                {isDiscoveringProjects ? "Searching" : "Find repositories"}
+              </button>
+            </div>
+            {projectCandidates.length ? (
+              <div className="project-candidate-list">
+                {projectCandidates.map((candidate) => {
+                  const alreadyAdded = config?.projects.some((project) => project.path === candidate.path);
+                  return (
+                    <article key={candidate.path} className="project-candidate">
+                      <div>
+                        <strong>{candidate.name}</strong>
+                        <span>{candidate.path}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void addProject(candidate);
+                        }}
+                        disabled={!config}
+                      >
+                        {alreadyAdded ? "Select" : "Add"}
+                      </button>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : null}
           </div>
 
           {projectError ? <p className="project-error">{projectError}</p> : null}
@@ -441,6 +674,7 @@ function addLog(role: LogEntry["role"], text: string) {
             onClick={() => {
               void executeToolCall("workspace_status", null, "{}");
             }}
+            disabled={!hasProject}
           >
             <GitPullRequest size={18} />
             Inspect
@@ -450,11 +684,35 @@ function addLog(role: LogEntry["role"], text: string) {
             onClick={() => {
               void executeToolCall("run_tests", null, "{}");
             }}
+            disabled={!hasProject}
           >
             <Play size={18} />
             Tests
           </button>
         </div>
+
+        <section className="voice-panel" aria-label="Voice style">
+          <div className="voice-heading">
+            <div>
+              <p className="eyebrow">Voice profile</p>
+              <h2>{VOICE_STYLES.find((style) => style.id === voiceStyle)?.name}</h2>
+            </div>
+            <SlidersHorizontal size={20} />
+          </div>
+          <div className="voice-style-grid">
+            {VOICE_STYLES.map((style) => (
+              <button
+                key={style.id}
+                type="button"
+                className={`voice-style-option ${style.id === voiceStyle ? "active" : ""}`}
+                onClick={() => setVoiceStyle(style.id)}
+              >
+                <span>{style.name}</span>
+                <small>{style.detail}</small>
+              </button>
+            ))}
+          </div>
+        </section>
 
         <div className="prompt-row">
           <input
@@ -467,29 +725,31 @@ function addLog(role: LogEntry["role"], text: string) {
             }}
             placeholder="Ask by text when you do not want to speak"
           />
-          <button type="button" onClick={sendText} disabled={!isConnected}>
+          <button type="button" onClick={sendText} disabled={!canSendText}>
             <Send size={18} />
           </button>
         </div>
 
-        <div className="conversation">
-          {logs.length === 0 ? (
-            <div className="empty-state">Connect and ask about the repository.</div>
-          ) : (
-            logs.map((log) => (
-              <article key={log.id} className={`message ${log.role}`}>
-                <span>{log.role}</span>
-                <p>{log.text}</p>
-              </article>
-            ))
-          )}
+        <div className="conversation-frame">
+          <div className="conversation" ref={conversationRef}>
+            {logs.length === 0 ? (
+              <div className="empty-state">Awaiting transmission — connect and engage</div>
+            ) : (
+              logs.map((log) => (
+                <article key={log.id} className={`message ${log.role}`}>
+                  <span>{log.role}</span>
+                  <p>{log.text}</p>
+                </article>
+              ))
+            )}
+          </div>
         </div>
       </section>
 
       <aside className="patch-panel">
         <header>
           <div>
-            <p className="eyebrow">Human approval</p>
+            <p className="eyebrow">Human approval required</p>
             <h2>Pending patch</h2>
           </div>
           {pendingPatch ? <span className="patch-id">{pendingPatch.id.slice(0, 8)}</span> : null}
@@ -497,7 +757,9 @@ function addLog(role: LogEntry["role"], text: string) {
 
         {pendingPatch ? (
           <>
-            <pre className="diff-view">{pendingPatch.diff}</pre>
+            <div className="diff-frame">
+              <pre className="diff-view">{pendingPatch.diff}</pre>
+            </div>
             <div className="patch-actions">
               <button className="primary" type="button" onClick={applyPendingPatch} disabled={isApplying}>
                 <Check size={18} />
@@ -510,7 +772,7 @@ function addLog(role: LogEntry["role"], text: string) {
             </div>
           </>
         ) : (
-          <div className="empty-state">Patch proposals from the model will appear here.</div>
+          <div className="empty-state">No patches in queue — model proposals will surface here</div>
         )}
       </aside>
     </main>
@@ -546,4 +808,119 @@ async function formatApiError(response: Response) {
   }
 
   return raw || `Realtime connection failed with HTTP ${response.status}.`;
+}
+
+function buildVoiceStyleGraph(
+  context: AudioContext,
+  source: AudioNode,
+  style: VoiceStyleId
+) {
+  const cleanupTasks: Array<() => void> = [];
+  const output = context.createGain();
+
+  output.gain.value = 0.9;
+  output.connect(context.destination);
+  cleanupTasks.push(() => output.disconnect());
+
+  const connectStyledGraph = (effectNodes: AudioNode[], dry: number, wet: number) => {
+    const firstEffect = effectNodes[0];
+    const lastEffect = effectNodes[effectNodes.length - 1];
+    const dryGain = context.createGain();
+    const wetGain = context.createGain();
+
+    dryGain.gain.value = dry;
+    wetGain.gain.value = wet;
+    source.connect(dryGain).connect(output);
+    source.connect(firstEffect);
+    for (let index = 0; index < effectNodes.length - 1; index += 1) {
+      effectNodes[index].connect(effectNodes[index + 1]);
+    }
+    lastEffect.connect(wetGain).connect(output);
+    cleanupTasks.push(() => {
+      source.disconnect();
+      dryGain.disconnect();
+      wetGain.disconnect();
+      effectNodes.forEach((node) => node.disconnect());
+    });
+  };
+
+  if (style === "natural") {
+    return () => cleanupTasks.splice(0).forEach((cleanup) => cleanup());
+  }
+
+  if (style === "console_ai") {
+    const highpass = createBiquad(context, "highpass", 180, 0.7);
+    const mid = createBiquad(context, "peaking", 1400, 1.2, 5.2);
+    const lowpass = createBiquad(context, "lowpass", 4400, 0.8);
+
+    connectStyledGraph([highpass, mid, lowpass], 0.18, 1);
+    return () => cleanupTasks.splice(0).forEach((cleanup) => cleanup());
+  }
+
+  if (style === "starship") {
+    const highpass = createBiquad(context, "highpass", 120, 0.8);
+    const presence = createBiquad(context, "peaking", 2400, 0.9, 3.6);
+    const lowpass = createBiquad(context, "lowpass", 6400, 0.7);
+    const delay = context.createDelay(0.28);
+    const feedback = context.createGain();
+    delay.delayTime.value = 0.055;
+    feedback.gain.value = 0.16;
+    delay.connect(feedback).connect(delay);
+    cleanupTasks.push(() => feedback.disconnect());
+
+    connectStyledGraph([highpass, presence, lowpass, delay], 0.72, 0.34);
+    return () => cleanupTasks.splice(0).forEach((cleanup) => cleanup());
+  }
+
+  if (style === "synthetic") {
+    const highpass = createBiquad(context, "highpass", 210, 0.8);
+    const presence = createBiquad(context, "peaking", 1850, 1.1, 4.8);
+    const lowpass = createBiquad(context, "lowpass", 4600, 0.8);
+    const shaper = context.createWaveShaper();
+
+    shaper.curve = makeDistortionCurve(24);
+    shaper.oversample = "2x";
+
+    connectStyledGraph([highpass, presence, lowpass, shaper], 0.58, 0.5);
+    return () => cleanupTasks.splice(0).forEach((cleanup) => cleanup());
+  }
+
+  const highpass = createBiquad(context, "highpass", 90, 0.7);
+  const lowShelf = createBiquad(context, "lowshelf", 190, 0.8, 5);
+  const lowpass = createBiquad(context, "lowpass", 3000, 0.85);
+
+  connectStyledGraph([highpass, lowShelf, lowpass], 0.28, 1);
+  return () => cleanupTasks.splice(0).forEach((cleanup) => cleanup());
+}
+
+function createBiquad(
+  context: AudioContext,
+  type: BiquadFilterType,
+  frequency: number,
+  q: number,
+  gain = 0
+) {
+  const filter = context.createBiquadFilter();
+  filter.type = type;
+  filter.frequency.value = frequency;
+  filter.Q.value = q;
+  filter.gain.value = gain;
+  return filter;
+}
+
+function makeDistortionCurve(amount: number) {
+  const samples = 2048;
+  const curve = new Float32Array(samples);
+  const deg = Math.PI / 180;
+
+  for (let i = 0; i < samples; i += 1) {
+    const x = (i * 2) / samples - 1;
+    curve[i] = ((3 + amount) * x * 20 * deg) / (Math.PI + amount * Math.abs(x));
+  }
+
+  return curve;
+}
+
+function isVoiceStyleId(value: string | null): value is VoiceStyleId {
+  return VOICE_STYLES.some((style) => style.id === value);
 }
