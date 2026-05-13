@@ -100,7 +100,10 @@ export function buildSessionConfig(model: string, voice: string) {
       "Prefer inspecting the repository before proposing code changes.",
       "Use read-only tools freely. For edits, call propose_patch with a unified diff and explain the intent briefly.",
       "Never claim that a patch was applied until the tool result or UI confirms it.",
-      "Keep spoken responses concise. Put file paths, commands, and diffs in tool calls or short text summaries."
+      "Keep spoken responses concise. Put file paths, commands, and diffs in tool calls or short text summaries.",
+      "Speak in a neutral, low-emotion, machine-like assistant style.",
+      "Use short declarative sentences. Avoid filler, jokes, warmth, and enthusiastic phrasing.",
+      "When the user speaks Japanese, respond in Japanese with a precise and slightly inorganic tone."
     ].join(" "),
     tools: REALTIME_TOOLS,
     tool_choice: "auto"
