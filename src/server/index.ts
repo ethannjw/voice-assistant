@@ -1,7 +1,6 @@
 import "dotenv/config";
 import express from "express";
 import { readdir, stat } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer as createViteServer } from "vite";
@@ -160,17 +159,10 @@ app.listen(port, () => {
 });
 
 async function discoverRepositories() {
-  const roots = uniquePaths([
-    ...String(process.env.PROJECT_SEARCH_ROOTS ?? "")
-      .split(path.delimiter)
-      .filter(Boolean),
-    path.dirname(defaultWorkspaceRoot),
-    path.join(os.homedir(), "ghq"),
-    path.join(os.homedir(), "src"),
-    path.join(os.homedir(), "dev"),
-    path.join(os.homedir(), "Developer"),
-    "/Volumes/SSD/ghq"
-  ]);
+  const configuredRoots = String(process.env.PROJECT_SEARCH_ROOTS ?? "")
+    .split(path.delimiter)
+    .filter(Boolean);
+  const roots = uniquePaths(configuredRoots.length ? configuredRoots : [path.dirname(process.cwd())]);
   const found = new Map<string, { name: string; path: string }>();
 
   for (const root of roots) {

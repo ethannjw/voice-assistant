@@ -110,6 +110,7 @@ npm run dev
 
 1. **Active workspace** パネルの **`Find repositories`** ボタンをクリック
 2. `PROJECT_SEARCH_ROOTS` で指定したディレクトリ配下から Git リポジトリを自動検出
+   - 未指定の場合は、このアプリのリポジトリの親ディレクトリを検索します
 3. 一覧から選んで追加
 
 ### B. パスを直接入力
@@ -195,7 +196,7 @@ UI 下部の **`INSPECT`** / **`TESTS`** ボタンは、`workspace_status` と `
 | `OPENAI_REALTIME_VOICE` |   | `marin` | モデル音声プリセット (`marin`, `cedar`, `alloy` など) |
 | `WORKSPACE_ROOT` |   | `process.cwd()` | 起動時の既定ワークスペース(プロジェクト未選択時のフォールバック) |
 | `PROJECTS_FILE` |   | `.voice-pair-programmer/projects.json` | 登録済みプロジェクトの保存先 |
-| `PROJECT_SEARCH_ROOTS` |   | (なし) | `Find repositories` の検索対象。`:` または `;` 区切りで複数指定可 |
+| `PROJECT_SEARCH_ROOTS` |   | このリポジトリの親ディレクトリ | `Find repositories` の検索対象。`:` または `;` 区切りで複数指定可 |
 | `TEST_COMMAND` |   | `npm test` | `run_tests` ツールが実行するコマンド |
 | `PORT` |   | `8787` | 開発サーバーのポート |
 
