@@ -21,36 +21,22 @@ export class ProjectStore {
     try {
       const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as ProjectStoreFile;
       this.projects = parsed.projects.map(normalizeProject);
-      this.activeProjectId = parsed.activeProjectId;
+      this.projects = await filterExistingProjects(this.projects);
+      this.activeProjectId = "";
     } catch {
-      const now = new Date().toISOString();
-      const projectPath = await resolveExistingDirectory(this.defaultProjectPath, process.cwd());
-      const project = createProject(defaultName(projectPath), projectPath, now);
-      this.projects = [project];
-      this.activeProjectId = project.id;
+      this.projects = [];
+      this.activeProjectId = "";
       await this.save();
     }
+
+    this.removeAutoCreatedDefaultProject();
 
     if (!this.projects.some((project) => project.id === this.activeProjectId)) {
-      this.activeProjectId = this.projects[0]?.id ?? "";
+      this.activeProjectId = "";
       await this.save();
     }
 
-    try {
-      await validateProjectPath(this.getActiveProject().path);
-    } catch {
-      const fallbackPath = await resolveExistingDirectory(this.defaultProjectPath, process.cwd());
-      const existing = this.projects.find((project) => project.path === fallbackPath);
-      if (existing) {
-        this.activeProjectId = existing.id;
-      } else {
-        const now = new Date().toISOString();
-        const project = createProject(defaultName(fallbackPath), fallbackPath, now);
-        this.projects.push(project);
-        this.activeProjectId = project.id;
-      }
-      await this.save();
-    }
+    await this.save();
   }
 
   listProjects() {
@@ -59,11 +45,7 @@ export class ProjectStore {
 
   getActiveProject() {
     const project = this.projects.find((candidate) => candidate.id === this.activeProjectId);
-    if (!project) {
-      throw new Error("No active project is configured.");
-    }
-
-    return project;
+    return project ?? null;
   }
 
   async addProject(input: { name?: unknown; path?: unknown }) {
@@ -87,6 +69,11 @@ export class ProjectStore {
     return project;
   }
 
+  async clearActiveProject() {
+    this.activeProjectId = "";
+    await this.save();
+  }
+
   async selectProject(id: string) {
     const project = this.projects.find((candidate) => candidate.id === id);
     if (!project) {
@@ -108,6 +95,19 @@ export class ProjectStore {
     };
     await writeFile(this.filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   }
+
+  private removeAutoCreatedDefaultProject() {
+    const autoPaths = [path.resolve(this.defaultProjectPath), process.cwd()];
+    const project = this.projects[0];
+    const isAutoCreatedDefault =
+      project &&
+      autoPaths.some((autoPath) => project.path === autoPath && project.name === defaultName(autoPath));
+
+    if (this.projects.length === 1 && isAutoCreatedDefault) {
+      this.projects = [];
+      this.activeProjectId = "";
+    }
+  }
 }
 
 async function validateProjectPath(input: unknown) {
@@ -123,14 +123,6 @@ async function validateProjectPath(input: unknown) {
   }
 
   return projectPath;
-}
-
-async function resolveExistingDirectory(preferredPath: string, fallbackPath: string) {
-  try {
-    return await validateProjectPath(preferredPath);
-  } catch {
-    return validateProjectPath(fallbackPath);
-  }
 }
 
 function createProject(name: string, projectPath: string, now: string): ProjectConfig {
@@ -153,4 +145,19 @@ function normalizeProject(project: ProjectConfig): ProjectConfig {
 
 function defaultName(projectPath: string) {
   return path.basename(path.resolve(projectPath)) || projectPath;
+}
+
+async function filterExistingProjects(projects: ProjectConfig[]) {
+  const checked = await Promise.all(
+    projects.map(async (project) => {
+      try {
+        await validateProjectPath(project.path);
+        return project;
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  return checked.filter((project): project is ProjectConfig => Boolean(project));
 }

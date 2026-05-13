@@ -1,5 +1,7 @@
 import "dotenv/config";
 import express from "express";
+import { readdir, stat } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer as createViteServer } from "vite";
@@ -21,7 +23,7 @@ const realtimeModel = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2";
 const voice = process.env.OPENAI_REALTIME_VOICE ?? "marin";
 const projectStore = new ProjectStore(projectStorePath, defaultWorkspaceRoot);
 await projectStore.load();
-const tools = new WorkspaceTools(projectStore.getActiveProject().path);
+const tools = new WorkspaceTools(projectStore.getActiveProject()?.path ?? null);
 const isProduction = process.env.NODE_ENV === "production";
 
 app.use("/api/realtime/call", express.text({ type: ["application/sdp", "text/plain"] }));
@@ -55,6 +57,23 @@ app.post("/api/projects", async (req, res) => {
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
   }
+});
+
+app.post("/api/projects/discover", async (_req, res) => {
+  try {
+    res.json({ projects: await discoverRepositories() });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.post("/api/projects/deselect", async (_req, res) => {
+  await projectStore.clearActiveProject();
+  tools.setWorkspaceRoot(null);
+  res.json({
+    activeProject: null,
+    projects: projectStore.listProjects()
+  });
 });
 
 app.post("/api/projects/:id/select", async (req, res) => {
@@ -136,6 +155,83 @@ if (isProduction) {
 
 app.listen(port, () => {
   console.log(`Voice Pair Programmer server listening on http://localhost:${port}`);
-  console.log(`Workspace root: ${tools.getWorkspaceRoot()}`);
+  console.log(`Workspace root: ${tools.getWorkspaceRoot() ?? "(none selected)"}`);
   console.log(`Realtime model: ${realtimeModel}`);
 });
+
+async function discoverRepositories() {
+  const roots = uniquePaths([
+    ...String(process.env.PROJECT_SEARCH_ROOTS ?? "")
+      .split(path.delimiter)
+      .filter(Boolean),
+    path.dirname(defaultWorkspaceRoot),
+    path.join(os.homedir(), "ghq"),
+    path.join(os.homedir(), "src"),
+    path.join(os.homedir(), "dev"),
+    path.join(os.homedir(), "Developer"),
+    "/Volumes/SSD/ghq"
+  ]);
+  const found = new Map<string, { name: string; path: string }>();
+
+  for (const root of roots) {
+    await collectGitRepositories(root, 4, found);
+    if (found.size >= 100) {
+      break;
+    }
+  }
+
+  return [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function collectGitRepositories(
+  directory: string,
+  depth: number,
+  found: Map<string, { name: string; path: string }>
+) {
+  if (depth < 0 || found.size >= 100) {
+    return;
+  }
+
+  let info;
+  try {
+    info = await stat(directory);
+  } catch {
+    return;
+  }
+
+  if (!info.isDirectory()) {
+    return;
+  }
+
+  const resolved = path.resolve(directory);
+  try {
+    if ((await stat(path.join(resolved, ".git"))).isDirectory()) {
+      found.set(resolved, { name: path.basename(resolved), path: resolved });
+      return;
+    }
+  } catch {
+    // Continue scanning descendants.
+  }
+
+  let entries;
+  try {
+    entries = await readdir(resolved, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && !shouldSkipDirectory(entry.name))
+      .slice(0, 80)
+      .map((entry) => collectGitRepositories(path.join(resolved, entry.name), depth - 1, found))
+  );
+}
+
+function shouldSkipDirectory(name: string) {
+  return [".git", "node_modules", "dist", "build", "Library"].includes(name);
+}
+
+function uniquePaths(paths: string[]) {
+  return [...new Set(paths.map((candidate) => path.resolve(candidate)))];
+}

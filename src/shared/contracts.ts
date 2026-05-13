@@ -31,7 +31,7 @@ export type ProjectConfig = {
 };
 
 export type AppConfig = {
-  activeProject: ProjectConfig;
+  activeProject: ProjectConfig | null;
   projects: ProjectConfig[];
   realtimeModel: string;
   voice: string;

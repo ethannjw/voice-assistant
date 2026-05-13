@@ -12,9 +12,9 @@ const MAX_FILE_BYTES = 80_000;
 
 export class WorkspaceTools {
   private pendingPatch: PendingPatch | null = null;
-  private workspaceRoot: string;
+  private workspaceRoot: string | null;
 
-  constructor(workspaceRoot: string) {
+  constructor(workspaceRoot: string | null) {
     this.workspaceRoot = workspaceRoot;
   }
 
@@ -22,7 +22,7 @@ export class WorkspaceTools {
     return this.workspaceRoot;
   }
 
-  setWorkspaceRoot(workspaceRoot: string) {
+  setWorkspaceRoot(workspaceRoot: string | null) {
     if (this.workspaceRoot !== workspaceRoot) {
       this.pendingPatch = null;
       this.workspaceRoot = workspaceRoot;
@@ -64,6 +64,10 @@ export class WorkspaceTools {
   }
 
   async applyPatch(id: string): Promise<ToolResult> {
+    if (!this.workspaceRoot) {
+      return requireWorkspaceResult();
+    }
+
     if (!this.pendingPatch || this.pendingPatch.id !== id) {
       return { ok: false, output: `No pending patch found for id ${id}.` };
     }
@@ -80,6 +84,10 @@ export class WorkspaceTools {
   }
 
   private async workspaceStatus(): Promise<ToolResult> {
+    if (!this.workspaceRoot) {
+      return requireWorkspaceResult();
+    }
+
     const [status, files] = await Promise.all([
       this.exec("git", ["status", "--short"]),
       this.exec("git", ["ls-files"])
@@ -100,6 +108,10 @@ export class WorkspaceTools {
   }
 
   private async searchWorkspace(query: string): Promise<ToolResult> {
+    if (!this.workspaceRoot) {
+      return requireWorkspaceResult();
+    }
+
     if (!query.trim()) {
       return { ok: false, output: "query is required." };
     }
@@ -119,6 +131,10 @@ export class WorkspaceTools {
   }
 
   private async readWorkspaceFile(relativePath: string): Promise<ToolResult> {
+    if (!this.workspaceRoot) {
+      return requireWorkspaceResult();
+    }
+
     const safePath = this.resolveInsideWorkspace(relativePath);
     await access(safePath);
     const content = await readFile(safePath);
@@ -137,10 +153,18 @@ export class WorkspaceTools {
   }
 
   private async gitDiff(): Promise<ToolResult> {
+    if (!this.workspaceRoot) {
+      return requireWorkspaceResult();
+    }
+
     return this.exec("git", ["diff", "--", "."]);
   }
 
   private async runTests(): Promise<ToolResult> {
+    if (!this.workspaceRoot) {
+      return requireWorkspaceResult();
+    }
+
     const command = process.env.TEST_COMMAND?.trim() || "npm test";
     const [bin, ...args] = splitCommand(command);
 
@@ -152,6 +176,10 @@ export class WorkspaceTools {
   }
 
   private proposePatch(diff: string): ToolResult {
+    if (!this.workspaceRoot) {
+      return requireWorkspaceResult();
+    }
+
     if (!diff.trim()) {
       return { ok: false, output: "diff is required." };
     }
@@ -170,6 +198,10 @@ export class WorkspaceTools {
   }
 
   private resolveInsideWorkspace(relativePath: string) {
+    if (!this.workspaceRoot) {
+      throw new Error(requireWorkspaceMessage());
+    }
+
     const normalized = path.normalize(relativePath).replace(/^(\.\.(\/|\\|$))+/, "");
     const fullPath = path.resolve(this.workspaceRoot, normalized);
 
@@ -185,6 +217,10 @@ export class WorkspaceTools {
     args: string[],
     options: { input?: string } = {}
   ): Promise<ToolResult> {
+    if (!this.workspaceRoot) {
+      return requireWorkspaceResult();
+    }
+
     try {
       const { stdout, stderr } = options.input
         ? await execFileWithInput(file, args, this.workspaceRoot, options.input)
@@ -206,6 +242,17 @@ export class WorkspaceTools {
       };
     }
   }
+}
+
+function requireWorkspaceMessage() {
+  return "No project is selected. Choose or add a local repository before using repository tools.";
+}
+
+function requireWorkspaceResult(): ToolResult {
+  return {
+    ok: false,
+    output: requireWorkspaceMessage()
+  };
 }
 
 function trimOutput(value: string) {
