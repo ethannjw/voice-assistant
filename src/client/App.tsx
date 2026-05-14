@@ -114,6 +114,7 @@ export function App() {
   const reconnectAudioOnNextResponseRef = useRef(false);
   const conversationRevisionRef = useRef(0);
   const toolAbortControllersRef = useRef<Set<AbortController>>(new Set());
+  const toolAbortReasonsRef = useRef<Map<AbortController, string>>(new Map());
   const conversationRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -226,9 +227,7 @@ export function App() {
     pcRef.current?.close();
     streamRef.current?.getTracks().forEach((track) => track.stop());
     cleanupRemoteAudio();
-    for (const controller of toolAbortControllersRef.current) {
-      controller.abort();
-    }
+    abortCodexTasks("Codex App Server task was interrupted because the realtime session disconnected.");
     toolAbortControllersRef.current.clear();
     dcRef.current = null;
     pcRef.current = null;
@@ -348,12 +347,6 @@ export function App() {
   }
 
   function interruptAssistantPlayback() {
-    conversationRevisionRef.current += 1;
-
-    for (const controller of toolAbortControllersRef.current) {
-      controller.abort();
-    }
-
     const channel = dcRef.current;
     if (channel?.readyState === "open" && assistantResponseActiveRef.current) {
       try {
@@ -368,6 +361,20 @@ export function App() {
     reconnectAudioOnNextResponseRef.current = true;
     cleanupAudioGraph();
     setNativePlaybackMuted(true);
+  }
+
+  function abortCodexTasks(reason: string) {
+    if (!toolAbortControllersRef.current.size) {
+      return false;
+    }
+
+    conversationRevisionRef.current += 1;
+    for (const controller of toolAbortControllersRef.current) {
+      toolAbortReasonsRef.current.set(controller, reason);
+      controller.abort();
+    }
+
+    return true;
   }
 
   function resumeAssistantPlayback() {
@@ -571,7 +578,14 @@ export function App() {
     }
 
     if (event.type === "conversation.item.input_audio_transcription.completed" && event.transcript) {
-      addLog("user", event.transcript);
+      const transcript = event.transcript.trim();
+      addLog("user", transcript);
+      if (isExplicitCodexInterruptionRequest(transcript)) {
+        const interrupted = abortCodexTasks("Codex App Server task was interrupted by an explicit user request.");
+        if (interrupted) {
+          addLog("system", "Codex App Server task interrupted by user request.");
+        }
+      }
       return;
     }
 
@@ -640,7 +654,7 @@ export function App() {
       if (abortController?.signal.aborted) {
         result = {
           ok: false,
-          output: "Codex App Server task was interrupted by new user speech."
+          output: toolAbortReasonsRef.current.get(abortController) ?? "Codex App Server task was interrupted."
         };
       } else {
         result = {
@@ -651,6 +665,7 @@ export function App() {
     } finally {
       if (abortController) {
         toolAbortControllersRef.current.delete(abortController);
+        toolAbortReasonsRef.current.delete(abortController);
       }
       if (heartbeat !== null) {
         window.clearInterval(heartbeat);
@@ -1232,6 +1247,29 @@ function makeDistortionCurve(amount: number) {
 
 function isVoiceStyleId(value: string | null): value is VoiceStyleId {
   return VOICE_STYLES.some((style) => style.id === value);
+}
+
+function isExplicitCodexInterruptionRequest(transcript: string) {
+  const text = transcript.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!text) {
+    return false;
+  }
+
+  if (/(止めないで|止めなくて|中断しないで|キャンセルしないで|続けて|続行)/.test(text)) {
+    return false;
+  }
+
+  const directStop =
+    /^(stop|cancel|abort|interrupt|やめて|止めて|止まって|中断|中断して|停止|停止して|キャンセル|キャンセルして|ストップ)$/.test(
+      text
+    );
+  if (directStop) {
+    return true;
+  }
+
+  const mentionsCodexTask = /(codex|コーデックス|処理|作業|タスク|実行|変更|編集|コマンド)/.test(text);
+  const stopIntent = /(stop|cancel|abort|interrupt|やめて|止めて|止まって|中断|停止|キャンセル|ストップ)/.test(text);
+  return mentionsCodexTask && stopIntent;
 }
 
 function formatApprovalKind(kind: CodexApprovalRequest["kind"]) {
