@@ -97,6 +97,9 @@ export class CodexAppServer {
     const chunks: string[] = [];
     let turnId: string | null = null;
     let removeAbortListener: (() => void) | null = null;
+    const completionAbortController = new AbortController();
+    const abortCompletionWait = () => completionAbortController.abort();
+    signal?.addEventListener("abort", abortCompletionWait, { once: true });
 
     const unsubscribe = this.onNotification((message) => {
       if (message.method !== "item/agentMessage/delta") return;
@@ -105,6 +108,16 @@ export class CodexAppServer {
         chunks.push(String(params.delta ?? ""));
       }
     });
+
+    const completedPromise = this.waitForNotification(
+      "turn/completed",
+      (params) =>
+        params.threadId === session.threadId &&
+        (!turnId || (params.turn as { id?: string } | undefined)?.id === turnId),
+      DEFAULT_TURN_TIMEOUT_MS,
+      completionAbortController.signal
+    );
+    completedPromise.catch(() => {});
 
     try {
       const response = (await this.process.request(
@@ -133,14 +146,7 @@ export class CodexAppServer {
         }
       }
 
-      const completed = await this.waitForNotification(
-        "turn/completed",
-        (params) =>
-          params.threadId === session.threadId &&
-          (!turnId || (params.turn as { id?: string } | undefined)?.id === turnId),
-        DEFAULT_TURN_TIMEOUT_MS,
-        signal
-      );
+      const completed = await completedPromise;
       const turn = completed.turn as { status?: string; error?: { message?: string } } | undefined;
 
       if (turn?.status === "failed") {
@@ -155,6 +161,8 @@ export class CodexAppServer {
       };
     } finally {
       removeAbortListener?.();
+      signal?.removeEventListener("abort", abortCompletionWait);
+      completionAbortController.abort();
       unsubscribe();
     }
   }
@@ -274,6 +282,10 @@ export class CodexAppServer {
       this.captureTurnDiff(message);
       return;
     }
+    if (message.method === "item/started") {
+      this.captureStartedFileChange(message);
+      return;
+    }
     if (message.method === "item/fileChange/patchUpdated") {
       this.captureFileChangeDiff(message);
     }
@@ -295,15 +307,42 @@ export class CodexAppServer {
 
   private captureFileChangeDiff(message: RpcMessage) {
     const params = message.params ?? {};
-    const itemId = typeof params.itemId === "string" ? params.itemId : "";
+    const itemId = getString(params.itemId);
+    const turnId = getString(params.turnId);
     const changes = Array.isArray(params.changes) ? params.changes : [];
+    this.captureFileChangeDiffFromChanges(itemId, turnId, changes);
+  }
+
+  private captureStartedFileChange(message: RpcMessage) {
+    const params = message.params ?? {};
+    const item = isRecord(params.item) ? params.item : null;
+    const itemType = getString(item?.type) ?? getString(params.type);
+    if (itemType !== "fileChange" && itemType !== "file_change") return;
+
+    const itemId = getString(params.itemId) ?? getString(item?.id);
+    const turnId = getString(params.turnId) ?? getString(item?.turnId);
+    const changes = getChanges(item?.changes) ?? getChanges(params.changes) ?? [];
+    this.captureFileChangeDiffFromChanges(itemId, turnId, changes);
+  }
+
+  private captureFileChangeDiffFromChanges(
+    itemId: string | null,
+    turnId: string | null,
+    changes: unknown[]
+  ) {
     if (!itemId || !changes.length) return;
 
     const diff = changes
       .map((change) => {
-        if (!change || typeof change !== "object") return "";
-        const pathLabel = "path" in change && typeof change.path === "string" ? `# ${change.path}\n` : "";
-        const content = "diff" in change && typeof change.diff === "string" ? change.diff : "";
+        if (!isRecord(change)) return "";
+        const path = getString(change.path) ?? getString(change.filePath);
+        const pathLabel = path ? `# ${path}\n` : "";
+        const content =
+          getString(change.diff) ??
+          getString(change.unifiedDiff) ??
+          getString(change.unified_diff) ??
+          getString(change.patch) ??
+          "";
         return `${pathLabel}${content}`.trim();
       })
       .filter(Boolean)
@@ -311,8 +350,12 @@ export class CodexAppServer {
     if (!diff) return;
 
     this.pendingFileDiffs.set(itemId, diff);
+    if (turnId) this.pendingTurnDiffs.set(turnId, diff);
     for (const approval of this.pendingApprovals.values()) {
       if (approval.request.kind === "file_change" && approval.itemId === itemId) {
+        approval.request.diff = diff;
+      }
+      if (turnId && approval.request.kind === "file_change" && approval.turnId === turnId && !approval.request.diff) {
         approval.request.diff = diff;
       }
     }
@@ -407,6 +450,18 @@ function throwIfAborted(signal?: AbortSignal) {
   if (signal?.aborted) {
     throw createAbortError();
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object";
+}
+
+function getString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function getChanges(value: unknown) {
+  return Array.isArray(value) ? value : null;
 }
 
 function createAbortError() {
