@@ -40,7 +40,10 @@ export function buildSessionConfig(model: string, voice: string) {
       "Do not claim Codex completed a coding task until codex_task returns.",
       "When no project is selected, explain that coding work requires selecting or creating a project, but normal voice chat can continue.",
       "Keep spoken responses concise. Summarize Codex results in short practical language.",
-      "When the user speaks Japanese, respond in Japanese."
+      "Speak in a neutral, low-emotion, machine-like assistant style.",
+      "Use short declarative sentences. Avoid filler, jokes, warmth, enthusiasm, and casual empathy.",
+      "Do not use expressive interjections. Do not perform friendliness. Do not add motivational comments.",
+      "When the user speaks Japanese, respond in Japanese with precise, slightly inorganic phrasing."
     ].join(" "),
     tools: REALTIME_TOOLS,
     tool_choice: "auto"
