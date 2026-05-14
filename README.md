@@ -27,11 +27,12 @@
 5. [プロジェクトの追加と切り替え](#プロジェクトの追加と切り替え)
 6. [音声プリセット (Voice profile)](#音声プリセット-voice-profile)
 7. [試してほしいプロンプト](#試してほしいプロンプト)
-8. [承認フロー](#承認フロー)
-9. [環境変数リファレンス](#環境変数リファレンス)
-10. [トラブルシューティング](#トラブルシューティング)
-11. [アーキテクチャ](#アーキテクチャ)
-12. [安全モデル](#安全モデル)
+8. [音声割り込みと Codex task](#音声割り込みと-codex-task)
+9. [承認フロー](#承認フロー)
+10. [環境変数リファレンス](#環境変数リファレンス)
+11. [トラブルシューティング](#トラブルシューティング)
+12. [アーキテクチャ](#アーキテクチャ)
+13. [安全モデル](#安全モデル)
 
 ---
 
@@ -41,6 +42,7 @@
 - **Codex App Server** によるスレッド、ターン、会話履歴、ストリーミング応答
 - **Codex による調査・実装**: プロジェクト選択後、Codex エージェントがリポジトリを読みつつ、コマンド実行やファイル編集を承認 UI 経由で提案
 - **承認 UI**: Codex から届くコマンド実行 / ファイル変更リクエストを、`APPROVE` / `SESSION` / `DECLINE` で対話的に処理
+- **音声割り込み**: 話し始めると再生音声だけを止め、明示的な中断指示がない限り Codex task は続行
 - **テキスト入力** によるフォールバック(声を出せない場面用)
 - **Voice profile**: 5 種類のブラウザ側エフェクト(無線風、ロボ風など)
 - **複数プロジェクト対応**: ローカル Git リポジトリを登録して切り替え
@@ -174,6 +176,7 @@ npm run dev
 セレクタから既存プロジェクトを選ぶだけ。プロジェクトを切り替えると:
 
 - 進行中の GPT-Realtime-2 音声セッションは自動で **切断**
+- 進行中の Codex task があれば **中断**
 - 未承認のパッチは **クリア**
 - 次回 `CONNECT` 時に新しいプロジェクトのコンテキストでセッションが始まる
 
@@ -359,6 +362,7 @@ flowchart LR
   Realtime -->|audio + events| Browser
   Realtime -->|codex_task tool call| Server
   Server -->|JSONL stdio<br/>thread/start + turn/start| Codex["codex app-server"]
+  Browser -->|explicit stop only<br/>turn/interrupt| Server
   Codex --> Workspace["Selected project<br/>or no-project temp workspace"]
   Browser -->|manual shortcuts| Server
   Server --> Tools["git / rg / fs<br/>tests / git apply"]
@@ -368,6 +372,7 @@ flowchart LR
 - Express は OpenAI Realtime API (`gpt-realtime-2`) にセッションを作り、**SDP アンサー** をブラウザへ返す
 - 音声と realtime events は **ブラウザ ↔ GPT-Realtime-2** でやり取りする
 - GPT-Realtime-2 がコーディング作業を必要と判断したら `codex_task` tool call を出し、Express が Codex App Server の `turn/start` に委譲する
+- ユーザーの発話開始は音声出力だけを止める。Codex task は「止めて」「中断して」などの明示的な中断指示、または接続切断時だけ `turn/interrupt` される
 - テキストのみの送信は、接続中は GPT-Realtime-2 の data channel、未接続時は Codex App Server の `turn/start` を使う
 - プロジェクト未選択時は一時ディレクトリのスレッドとして起動し、実装作業は選択済みプロジェクトでのみ行う
 
@@ -378,6 +383,8 @@ flowchart LR
 | 操作 | 実行タイミング |
 | --- | --- |
 | ローカルショートカットツール (`INSPECT` / `TESTS` ボタンや内部 API 直叩き) | クリック時に即実行(Codex を経由しない) |
+| 音声割り込み | 再生中の音声応答だけを停止。進行中の Codex task は継続 |
+| 明示的な Codex task 中断 | 「止めて」「中断して」「キャンセルして」などの発話、または `DISCONNECT` / プロジェクト切り替え時に `turn/interrupt` を送る |
 | Codex のコマンド実行 / ファイル変更 | 承認 UI に表示し、`APPROVE` / `SESSION` / `DECLINE` を Codex App Server に返す。**`APPROVE` または `SESSION` を押すまで実行されない** |
 | 旧ローカルツールのファイル変更 (`propose_patch`) | パッチを **保留**。UI で `APPLY` を押すまで適用されない(現状の Codex セッションでは発火しません) |
 
