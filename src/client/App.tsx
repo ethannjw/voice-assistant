@@ -598,18 +598,33 @@ export function App() {
   }
 
   async function executeToolCall(name: string, callId: string | null, rawArgs: string) {
-    addLog("tool", `${name}(${rawArgs})`);
-    const revisionAtStart = conversationRevisionRef.current;
-    const abortController = callId ? new AbortController() : null;
-    if (abortController) {
-      toolAbortControllersRef.current.add(abortController);
-    }
-
     let args: Record<string, unknown>;
     try {
       args = JSON.parse(rawArgs);
     } catch {
       args = {};
+    }
+
+    const isCodexTask = name === "codex_task";
+    const taskSummary = isCodexTask && typeof args.task === "string" ? args.task.trim() : "";
+    const startedAt = Date.now();
+
+    const headerLogId = isCodexTask
+      ? addLog("tool", formatCodexHeader(taskSummary, 0, "running"))
+      : addLog("tool", `${name}(${rawArgs})`);
+
+    let heartbeat: number | null = null;
+    if (isCodexTask) {
+      heartbeat = window.setInterval(() => {
+        const elapsedMs = Date.now() - startedAt;
+        updateLog(headerLogId, formatCodexHeader(taskSummary, elapsedMs, "running"));
+      }, 120);
+    }
+
+    const revisionAtStart = conversationRevisionRef.current;
+    const abortController = callId ? new AbortController() : null;
+    if (abortController) {
+      toolAbortControllersRef.current.add(abortController);
     }
 
     let result: ToolResult;
@@ -637,9 +652,22 @@ export function App() {
       if (abortController) {
         toolAbortControllersRef.current.delete(abortController);
       }
+      if (heartbeat !== null) {
+        window.clearInterval(heartbeat);
+      }
     }
 
     const interrupted = abortController?.signal.aborted || conversationRevisionRef.current !== revisionAtStart;
+
+    if (isCodexTask) {
+      const elapsedMs = Date.now() - startedAt;
+      const finalState: CodexHeaderState = interrupted
+        ? "interrupted"
+        : result.ok
+          ? "done"
+          : "error";
+      updateLog(headerLogId, formatCodexHeader(taskSummary, elapsedMs, finalState));
+    }
 
     if (result.metadata?.pendingPatch) {
       setPendingPatch(result.metadata.pendingPatch as PendingPatch);
@@ -732,15 +760,14 @@ export function App() {
     setPendingPatch(null);
   }
 
-function addLog(role: LogEntry["role"], text: string) {
-    setLogs((current) => [
-      ...current,
-      {
-        id: crypto.randomUUID(),
-        role,
-        text
-      }
-    ]);
+  function addLog(role: LogEntry["role"], text: string) {
+    const id = crypto.randomUUID();
+    setLogs((current) => [...current, { id, role, text }]);
+    return id;
+  }
+
+  function updateLog(id: string, text: string) {
+    setLogs((current) => current.map((log) => (log.id === id ? { ...log, text } : log)));
   }
 
   const isConnected = status === "connected";
@@ -1233,4 +1260,39 @@ function formatApprovalDecision(decision: CodexApprovalDecision) {
   }
 
   return "approved";
+}
+
+type CodexHeaderState = "running" | "done" | "error" | "interrupted";
+
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+function formatCodexHeader(task: string, elapsedMs: number, state: CodexHeaderState) {
+  const trimmed = task.length > 96 ? `${task.slice(0, 93)}...` : task;
+  const taskPart = trimmed ? ` — ${trimmed}` : "";
+  const seconds = Math.floor(elapsedMs / 1000);
+  const elapsed = formatElapsed(seconds);
+
+  if (state === "running") {
+    const spinner = SPINNER_FRAMES[Math.floor(elapsedMs / 100) % SPINNER_FRAMES.length];
+    return `${spinner} codex_task · running ${elapsed}${taskPart}`;
+  }
+
+  if (state === "done") {
+    return `✓ codex_task · finished in ${elapsed}${taskPart}`;
+  }
+
+  if (state === "interrupted") {
+    return `⏸ codex_task · interrupted at ${elapsed}${taskPart}`;
+  }
+
+  return `✗ codex_task · failed after ${elapsed}${taskPart}`;
+}
+
+function formatElapsed(totalSeconds: number) {
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
 }
