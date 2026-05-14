@@ -285,7 +285,7 @@ Codex がリポジトリに対して **コマンドを実行したり、ファ�
 | `OPENAI_API_KEY` | ✅ | — | GPT-Realtime-2 音声セッション用の OpenAI API キー |
 | `OPENAI_REALTIME_MODEL` |   | `gpt-realtime-2` | 音声会話に使う Realtime モデル |
 | `OPENAI_REALTIME_VOICE` |   | `marin` | GPT-Realtime-2 の音声プリセット (`marin`, `cedar`, `alloy` など) |
-| `CODEX_MODEL` |   | `gpt-5.4` | Codex App Server のコーディング用モデル。グローバル Codex 設定より優先 |
+| `CODEX_MODEL` |   | `gpt-5.4` | Codex App Server のコーディング用モデル(グローバル Codex 設定より優先)。`gpt-5.5` は App Server 経由では現状未対応([詳細](#gpt-55-requires-a-newer-version-of-codex-と表示される)) |
 | `WORKSPACE_ROOT` |   | `process.cwd()` | 古い保存データの自動整理に使う既定ワークスペース |
 | `NO_PROJECT_WORKSPACE` |   | OS の一時ディレクトリ配下 | プロジェクト未選択時に Codex App Server が使う空の作業ディレクトリ |
 | `PROJECTS_FILE` |   | `.voice-pair-programmer/projects.json` | 登録済みプロジェクトの保存先 |
@@ -332,7 +332,26 @@ Codex CLI の認証が通っていない可能性が高いです。
 
 ### `gpt-5.5` requires a newer version of Codex と表示される
 
-手元の Codex CLI が `gpt-5.5` の実行ターンに対応していない場合に発生します。`codex --version` を確認し、Codex CLI を更新してください。`codex-cli 0.130.0` では `gpt-5.4` が turn 完了まで確認できているため、このアプリの既定値は `CODEX_MODEL=gpt-5.4` です。必要に応じて `.env` で互換モデルを指定してください。
+**結論: 現状このアプリでは `gpt-5.5` は使えません。`CODEX_MODEL=gpt-5.4` を使ってください**(これが既定値です)。
+
+#### 何が起きているか
+
+このアプリは `codex app-server --listen stdio://` を子プロセスで起動し、JSON-RPC の `thread/start` で Codex セッションを開きます。`gpt-5.5` は Codex CLI 直叩き(`codex -c model='gpt-5.5'`)では動きますが、**App Server 経由(`thread/start` の `model` 指定)では現状サポートされておらず**、CLI を最新化してもこのエラーが返ります。
+
+OpenAI 公式ドキュメントも「`gpt-5.5` がまだ使えないなら `gpt-5.4` を使い続けること」を案内しています。
+
+#### 関連する上流の Issue
+
+- [openai/codex#19370](https://github.com/openai/codex/issues/19370) — GPT-5.5 not usable in Codex App for remote projects(未解決)
+- [openai/codex-plugin-cc#270](https://github.com/openai/codex-plugin-cc/issues/270) — gpt-5.5 が app-server レベルの構造化出力パスで未対応
+- [coleam00/Archon#1447](https://github.com/coleam00/Archon/issues/1447) — Codex SDK で gpt-5.5 が "requires newer version" を返す
+
+#### 対応策
+
+1. **`.env` で `CODEX_MODEL=gpt-5.4` を明示**(既定値なので未指定でも OK)
+2. Codex CLI は最新版にしておく:`npm install -g @openai/codex@latest`
+3. それでもエラーが出る場合、自動回復ロジック(`src/server/codex/index.ts:64-71`)が codex プロセスを再起動して 1 回リトライするので、**`npm run dev` 再起動は不要**
+4. 上流が `gpt-5.5` の app-server サポートを修正したら、`.env` で `CODEX_MODEL=gpt-5.5` に切り替え可能
 
 ### マイクが認識されない
 
