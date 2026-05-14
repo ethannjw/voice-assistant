@@ -39,9 +39,12 @@ export function useKeyboardShortcuts({
 
       const meta = event.metaKey || event.ctrlKey;
 
-      // ⌘D — Connect/Disconnect toggle
-      if (meta && event.key.toLowerCase() === "d") {
+      // ⌘D — Connect/Disconnect toggle.
+      // event.code === "KeyD" stays "KeyD" even when modifiers remap event.key
+      // (e.g. Option produces "∂" on macOS), so prefer it over event.key.
+      if (meta && event.code === "KeyD") {
         event.preventDefault();
+        event.stopPropagation();
         if (status === "connected") {
           onDisconnect();
         } else if (status === "idle" || status === "disconnected" || status === "error") {
@@ -92,8 +95,10 @@ export function useKeyboardShortcuts({
         onToggleMute();
       }
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    // capture: true so Cmd+D / Cmd+L preventDefault wins over the browser's
+    // bookmark / address-bar shortcuts.
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, [
     activeApprovalIndex,
     approvals,
