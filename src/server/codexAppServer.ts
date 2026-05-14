@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -26,6 +27,12 @@ type PendingRequest = {
 
 type PendingApproval = {
   messageId: RpcId;
+  itemId: string | null;
+  request: CodexApprovalRequest;
+};
+
+type ApprovalBuild = {
+  itemId: string | null;
   request: CodexApprovalRequest;
 };
 
@@ -427,20 +434,21 @@ export class CodexAppServer {
 
     this.pendingFileDiffs.set(itemId, diff);
     for (const approval of this.pendingApprovals.values()) {
-      if (approval.request.kind === "file_change" && approval.request.id.startsWith(`file_change:${itemId}:`)) {
+      if (approval.request.kind === "file_change" && approval.itemId === itemId) {
         approval.request.diff = diff;
       }
     }
   }
 
-  private queueApproval(message: RpcMessage, request: CodexApprovalRequest) {
+  private queueApproval(message: RpcMessage, approval: ApprovalBuild) {
     if (message.id === undefined) {
       return;
     }
 
-    this.pendingApprovals.set(request.id, {
+    this.pendingApprovals.set(approval.request.id, {
       messageId: message.id,
-      request
+      itemId: approval.itemId,
+      request: approval.request
     });
   }
 
@@ -503,76 +511,91 @@ export class CodexAppServer {
   }
 }
 
-function buildCommandApproval(message: RpcMessage): CodexApprovalRequest {
+function buildCommandApproval(message: RpcMessage): ApprovalBuild {
   const params = message.params ?? {};
   const command = typeof params.command === "string" ? params.command : null;
   const cwd = typeof params.cwd === "string" ? params.cwd : null;
   const itemId = typeof params.itemId === "string" ? params.itemId : String(message.id ?? "");
-  const approvalId = typeof params.approvalId === "string" ? params.approvalId : null;
 
   return {
-    id: `command:${approvalId ?? itemId}:${message.id}`,
-    kind: "command",
-    title: "Command execution",
-    reason: typeof params.reason === "string" ? params.reason : null,
-    command,
-    cwd,
-    grantRoot: null,
-    diff: null,
-    availableDecisions: getAvailableDecisions(params.availableDecisions),
-    createdAt: new Date().toISOString()
+    itemId,
+    request: {
+      id: makeApprovalId("command"),
+      kind: "command",
+      title: "Command execution",
+      reason: typeof params.reason === "string" ? params.reason : null,
+      command,
+      cwd,
+      grantRoot: null,
+      diff: null,
+      availableDecisions: getAvailableDecisions(params.availableDecisions),
+      createdAt: new Date().toISOString()
+    }
   };
 }
 
-function buildFileChangeApproval(message: RpcMessage, pendingFileDiffs: Map<string, string>): CodexApprovalRequest {
+function buildFileChangeApproval(message: RpcMessage, pendingFileDiffs: Map<string, string>): ApprovalBuild {
   const params = message.params ?? {};
   const itemId = typeof params.itemId === "string" ? params.itemId : String(message.id ?? "");
   const grantRoot = typeof params.grantRoot === "string" ? params.grantRoot : null;
 
   return {
-    id: `file_change:${itemId}:${message.id}`,
-    kind: "file_change",
-    title: "File change",
-    reason: typeof params.reason === "string" ? params.reason : null,
-    command: null,
-    cwd: null,
-    grantRoot,
-    diff: pendingFileDiffs.get(itemId) ?? null,
-    availableDecisions: ["accept", "acceptForSession", "decline"],
-    createdAt: new Date().toISOString()
+    itemId,
+    request: {
+      id: makeApprovalId("file_change"),
+      kind: "file_change",
+      title: "File change",
+      reason: typeof params.reason === "string" ? params.reason : null,
+      command: null,
+      cwd: null,
+      grantRoot,
+      diff: pendingFileDiffs.get(itemId) ?? null,
+      availableDecisions: ["accept", "acceptForSession", "decline"],
+      createdAt: new Date().toISOString()
+    }
   };
 }
 
-function buildLegacyCommandApproval(message: RpcMessage): CodexApprovalRequest {
+function buildLegacyCommandApproval(message: RpcMessage): ApprovalBuild {
   const params = message.params ?? {};
   return {
-    id: `legacy_command:${message.id}`,
-    kind: "legacy_command",
-    title: "Command execution",
-    reason: typeof params.reason === "string" ? params.reason : null,
-    command: typeof params.command === "string" ? params.command : null,
-    cwd: typeof params.cwd === "string" ? params.cwd : null,
-    grantRoot: null,
-    diff: null,
-    availableDecisions: ["accept", "decline"],
-    createdAt: new Date().toISOString()
+    itemId: null,
+    request: {
+      id: makeApprovalId("legacy_command"),
+      kind: "legacy_command",
+      title: "Command execution (legacy)",
+      reason: typeof params.reason === "string" ? params.reason : null,
+      command: typeof params.command === "string" ? params.command : null,
+      cwd: typeof params.cwd === "string" ? params.cwd : null,
+      grantRoot: null,
+      diff: null,
+      availableDecisions: ["accept", "decline"],
+      createdAt: new Date().toISOString()
+    }
   };
 }
 
-function buildLegacyFileApproval(message: RpcMessage): CodexApprovalRequest {
+function buildLegacyFileApproval(message: RpcMessage): ApprovalBuild {
   const params = message.params ?? {};
   return {
-    id: `legacy_file_change:${message.id}`,
-    kind: "legacy_file_change",
-    title: "Patch application",
-    reason: typeof params.reason === "string" ? params.reason : null,
-    command: null,
-    cwd: null,
-    grantRoot: null,
-    diff: typeof params.patch === "string" ? params.patch : null,
-    availableDecisions: ["accept", "decline"],
-    createdAt: new Date().toISOString()
+    itemId: null,
+    request: {
+      id: makeApprovalId("legacy_file_change"),
+      kind: "legacy_file_change",
+      title: "Patch application (legacy)",
+      reason: typeof params.reason === "string" ? params.reason : null,
+      command: null,
+      cwd: null,
+      grantRoot: null,
+      diff: typeof params.patch === "string" ? params.patch : null,
+      availableDecisions: ["accept", "decline"],
+      createdAt: new Date().toISOString()
+    }
   };
+}
+
+function makeApprovalId(kind: CodexApprovalRequest["kind"]) {
+  return `${kind}:${randomUUID()}`;
 }
 
 function getAvailableDecisions(value: unknown): CodexApprovalDecision[] {

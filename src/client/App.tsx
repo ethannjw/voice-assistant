@@ -1,5 +1,7 @@
 import {
   Check,
+  ChevronLeft,
+  ChevronRight,
   Code2,
   Folder,
   FolderPlus,
@@ -91,6 +93,7 @@ export function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [pendingPatch, setPendingPatch] = useState<PendingPatch | null>(null);
   const [codexApprovals, setCodexApprovals] = useState<CodexApprovalRequest[]>([]);
+  const [activeApprovalIndex, setActiveApprovalIndex] = useState(0);
   const [isApplying, setIsApplying] = useState(false);
   const [isResolvingApprovalId, setIsResolvingApprovalId] = useState<string | null>(null);
   const [isDataChannelOpen, setIsDataChannelOpen] = useState(false);
@@ -115,11 +118,16 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    // TODO: Replace this lightweight poll with SSE once approval volume or latency makes it worthwhile.
     const interval = window.setInterval(() => {
       void fetchCodexApprovals();
     }, 1500);
     return () => window.clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    setActiveApprovalIndex((current) => Math.min(current, Math.max(codexApprovals.length - 1, 0)));
+  }, [codexApprovals.length]);
 
   useEffect(() => {
     const node = conversationRef.current;
@@ -594,7 +602,7 @@ export function App() {
       }
 
       setCodexApprovals((current) => current.filter((candidate) => candidate.id !== approval.id));
-      addLog("system", `${approval.title} ${decision === "decline" ? "declined" : "approved"}.`);
+      addLog("system", `${approval.title} ${formatApprovalDecision(decision)}.`);
     } catch (error) {
       addLog("system", error instanceof Error ? error.message : String(error));
     } finally {
@@ -643,7 +651,7 @@ function addLog(role: LogEntry["role"], text: string) {
   const isConnected = status === "connected";
   const canSendText = input.trim().length > 0 && !isTextSubmitting;
   const hasProject = Boolean(config?.activeProject);
-  const activeApproval = codexApprovals[0] ?? null;
+  const activeApproval = codexApprovals[activeApprovalIndex] ?? null;
 
   return (
     <main className="app-shell">
@@ -834,7 +842,9 @@ function addLog(role: LogEntry["role"], text: string) {
             <h2>{activeApproval ? "Codex approval" : "Pending patch"}</h2>
           </div>
           {activeApproval ? (
-            <span className="patch-id">{codexApprovals.length}</span>
+            <span className="patch-id">
+              {activeApprovalIndex + 1}/{codexApprovals.length}
+            </span>
           ) : pendingPatch ? (
             <span className="patch-id">{pendingPatch.id.slice(0, 8)}</span>
           ) : null}
@@ -847,6 +857,29 @@ function addLog(role: LogEntry["role"], text: string) {
                 <span>{formatApprovalKind(activeApproval.kind)}</span>
                 <time>{new Date(activeApproval.createdAt).toLocaleTimeString()}</time>
               </div>
+              {codexApprovals.length > 1 ? (
+                <div className="approval-queue-nav" aria-label="Approval queue">
+                  <button
+                    type="button"
+                    onClick={() => setActiveApprovalIndex((current) => Math.max(current - 1, 0))}
+                    disabled={activeApprovalIndex === 0}
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <span>
+                    Request {activeApprovalIndex + 1} of {codexApprovals.length}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setActiveApprovalIndex((current) => Math.min(current + 1, codexApprovals.length - 1))
+                    }
+                    disabled={activeApprovalIndex >= codexApprovals.length - 1}
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+              ) : null}
               <h3>{activeApproval.title}</h3>
               {activeApproval.reason ? <p>{activeApproval.reason}</p> : null}
               {activeApproval.cwd ? (
@@ -1080,9 +1113,29 @@ function isVoiceStyleId(value: string | null): value is VoiceStyleId {
 }
 
 function formatApprovalKind(kind: CodexApprovalRequest["kind"]) {
-  if (kind === "command" || kind === "legacy_command") {
+  if (kind === "legacy_command") {
+    return "command legacy";
+  }
+
+  if (kind === "command") {
     return "command";
   }
 
+  if (kind === "legacy_file_change") {
+    return "file change legacy";
+  }
+
   return "file change";
+}
+
+function formatApprovalDecision(decision: CodexApprovalDecision) {
+  if (decision === "decline") {
+    return "declined";
+  }
+
+  if (decision === "acceptForSession") {
+    return "approved for this session";
+  }
+
+  return "approved";
 }

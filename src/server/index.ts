@@ -119,11 +119,13 @@ app.post("/api/codex/message", async (req, res) => {
 });
 
 app.get("/api/codex/approvals", (_req, res) => {
+  res.set("Cache-Control", "no-store");
   res.json({ approvals: codexAppServer.listPendingApprovals() });
 });
 
 app.post("/api/codex/approvals/:id", (req, res) => {
-  const decision = req.body?.decision;
+  const body = req.body;
+  const decision = body && typeof body === "object" && "decision" in body ? body.decision : undefined;
   if (!isApprovalDecision(decision)) {
     res.status(400).json({ error: "Unsupported approval decision." });
     return;

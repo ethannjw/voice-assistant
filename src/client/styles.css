@@ -891,6 +891,7 @@ h2 {
 
 .approval-field code,
 .approval-command {
+  display: block;
   width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--line);
@@ -907,6 +908,29 @@ h2 {
   margin: 0;
   max-height: 180px;
   overflow: auto;
+}
+
+.approval-queue-nav {
+  display: grid;
+  grid-template-columns: 32px 1fr 32px;
+  align-items: center;
+  gap: 8px;
+}
+
+.approval-queue-nav button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.approval-queue-nav span {
+  color: var(--ink-mute);
+  font-family: var(--display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: center;
+  text-transform: uppercase;
 }
 
 /* ========== CONVERSATION ========== */
