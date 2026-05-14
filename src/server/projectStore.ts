@@ -74,6 +74,20 @@ export class ProjectStore {
     await this.save();
   }
 
+  async removeProject(id: string) {
+    const index = this.projects.findIndex((candidate) => candidate.id === id);
+    if (index === -1) {
+      throw new Error(`Unknown project id: ${id}`);
+    }
+
+    const [removed] = this.projects.splice(index, 1);
+    if (this.activeProjectId === removed.id) {
+      this.activeProjectId = "";
+    }
+    await this.save();
+    return removed;
+  }
+
   async selectProject(id: string) {
     const project = this.projects.find((candidate) => candidate.id === id);
     if (!project) {

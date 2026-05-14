@@ -1,10 +1,20 @@
 # Voice Pair Programmer
 
-ブラウザのマイクから OpenAI **Realtime API (`gpt-realtime-2`)** に直接接続し、ローカルリポジトリを音声で読み取り・調査・パッチ提案できる **Codex App Server スタイルの検証用プロトタイプ**です。
+**OpenAI Realtime API (`gpt-realtime-2`)** で音声入出力を担当し、**Codex CLI の `codex app-server`** で実コーディング(リポジトリ調査・コマンド実行・ファイル編集)を担当する、二系統構成の検証用プロトタイプです。
 
-ファイル変更はすべて UI 上での **人間の承認** を経てから適用されるため、安心して試せます。
+ブラウザのマイクで話しかけると、音声は WebRTC で直接 Realtime API に流れて応答が返ります。Codex に作業をさせたい指示は、Realtime のターン経由で `codex app-server` に転送され、結果は承認 UI 経由でユーザーに確認されます。
 
-> 🔬 これは検証用リポジトリです。実プロダクトではなく、Codex App Server パターンと GPT-Realtime-2 を組み合わせたときの操作感・実装パターンを確かめることを目的にしています。
+プロジェクト未選択でも会話だけを試せます。実装やリポジトリ調査を行う場合は、先にローカル Git リポジトリをプロジェクトとして選択します。
+
+> 🔬 これは検証用リポジトリです。実プロダクトではなく、**GPT-Realtime-2 と `codex app-server` を組み合わせた音声ペアプログラミング** の操作感・実装パターンを確かめることを目的にしています。Codex App の UI やリモートプロジェクト機能と直接連携するものではありません。
+
+## 役割分担
+
+| コンポーネント | 担当 | 認証 |
+| --- | --- | --- |
+| **OpenAI Realtime API (`gpt-realtime-2`)** | 音声の入出力(WebRTC ↔ ブラウザ) | `OPENAI_API_KEY`(`.env`) |
+| **Codex CLI app-server** (`codex app-server --listen stdio://`) | リポジトリ調査・コマンド実行・ファイル編集 | Codex CLI のログイン情報 |
+| **Express (このアプリ)** | 両者を橋渡し、承認 UI、プロジェクト管理 | — |
 
 ---
 
@@ -17,40 +27,52 @@
 5. [プロジェクトの追加と切り替え](#プロジェクトの追加と切り替え)
 6. [音声プリセット (Voice profile)](#音声プリセット-voice-profile)
 7. [試してほしいプロンプト](#試してほしいプロンプト)
-8. [パッチ承認フロー](#パッチ承認フロー)
-9. [環境変数リファレンス](#環境変数リファレンス)
-10. [トラブルシューティング](#トラブルシューティング)
-11. [アーキテクチャ](#アーキテクチャ)
-12. [安全モデル](#安全モデル)
+8. [音声割り込みと Codex task](#音声割り込みと-codex-task)
+9. [承認フロー](#承認フロー)
+10. [環境変数リファレンス](#環境変数リファレンス)
+11. [トラブルシューティング](#トラブルシューティング)
+12. [アーキテクチャ](#アーキテクチャ)
+13. [安全モデル](#安全モデル)
 
 ---
 
 ## できること
 
-- **ブラウザ ↔ OpenAI Realtime** の双方向音声セッション (WebRTC, `/v1/realtime/calls`)
-- **ローカルワークスペース調査ツール** をモデルに公開
-  - `workspace_status` — `git status`
-  - `search_workspace` — `rg` による全文検索
-  - `read_file` — ファイル読み取り
-  - `git_diff` — ワーキングツリー差分
-  - `run_tests` — `npm test`(または `TEST_COMMAND`)実行
-  - `propose_patch` — 統一 diff のパッチ提案 (人間承認必須)
+- **ブラウザ ↔ OpenAI Realtime API** の WebRTC 音声セッション(`gpt-realtime-2`)
+- **Codex CLI app-server** によるスレッド、ターン、会話履歴、ストリーミング応答
+- **Codex による調査・実装**: プロジェクト選択後、Codex エージェントがリポジトリを読みつつ、コマンド実行やファイル編集を承認 UI 経由で提案
+- **承認 UI**: Codex から届くコマンド実行 / ファイル変更リクエストを、`APPROVE` / `SESSION` / `DECLINE` で対話的に処理
+- **音声割り込み**: 話し始めると再生音声だけを止め、明示的な中断指示がない限り Codex task は続行
 - **テキスト入力** によるフォールバック(声を出せない場面用)
 - **Voice profile**: 5 種類のブラウザ側エフェクト(無線風、ロボ風など)
-- **パッチ承認 UI**: 提案された diff を確認してから Apply
 - **複数プロジェクト対応**: ローカル Git リポジトリを登録して切り替え
+
+### UI からのワンクリックショートカット
+
+Codex セッションとは独立して、Express が直接実行するユーティリティが画面下部にあります。
+
+| ボタン | 内容 |
+| --- | --- |
+| `INSPECT` | `git status` を実行して結果をログ表示 |
+| `TESTS` | `npm test`(または `TEST_COMMAND`)を実行 |
+
+これらは Codex のターンを介さず、サーバー側のローカルツール (`workspace_status`, `run_tests` 等) を直接叩きます。声でも `"テストを実行して"` のようにお願いできますが、その場合は Codex がコマンド実行リクエストを承認 UI に送ってくる流れになります。
 
 ---
 
 ## 必要なもの
 
-| ツール | 用途 |
+| ツール / アカウント | 用途 |
 | --- | --- |
 | **Node.js 20+** | サーバー / クライアント実行 |
 | **npm** | 依存インストール |
+| **Codex CLI** | `codex app-server` の起動(コーディング側) |
 | **`rg` (ripgrep)** | `search_workspace` ツールに必須 |
-| **OpenAI API キー** | `gpt-realtime-2` が利用できるプロジェクト |
+| **OpenAI API キー(`gpt-realtime-2` 利用可)** | 音声セッション(Realtime API)の認証 |
+| **Codex のログイン** | Codex CLI app-server の認証 |
 | **モダンブラウザ** | WebRTC + Web Audio (Chrome / Edge / Safari) |
+
+> ⚠️ `gpt-realtime-2` は OpenAI Realtime API 経由で利用するモデルです。プロジェクトに **Realtime API へのアクセス権** と **`gpt-realtime-2` の利用権限** が付与されている必要があります。組織やプロジェクトのアクセス状況は OpenAI ダッシュボードで確認してください。
 
 `rg` のインストール例:
 
@@ -60,6 +82,42 @@ brew install ripgrep
 # Ubuntu / Debian
 sudo apt install ripgrep
 ```
+
+### 認証は 2 系統
+
+このアプリは **音声 = Realtime API** と **コーディング = Codex CLI app-server** の二系統で動くため、認証も 2 つ必要です。
+
+#### 1. Realtime API 用の `OPENAI_API_KEY`(音声用)
+
+ブラウザマイクからの音声セッションは、Express が **OpenAI Realtime API (`/v1/realtime/calls`) を直接叩きます**。サーバー起動時に `.env` から `OPENAI_API_KEY` を読み込み、`Authorization: Bearer …` ヘッダで使います。
+
+OpenAI ダッシュボード → **API keys** から発行したキーを `.env` に書きます:
+
+```bash
+# .env
+OPENAI_API_KEY=sk-proj-...
+OPENAI_REALTIME_MODEL=gpt-realtime-2
+OPENAI_REALTIME_VOICE=marin
+```
+
+API キーは **サーバー側にしか存在しません**(ブラウザには SDP 応答だけが返ります)。
+
+#### 2. Codex CLI のログイン(コーディング用)
+
+`npm run dev` を起動する **前に** Codex CLI の認証を済ませておきます。
+
+```bash
+# 1. Codex CLI をインストール (未インストールの場合)
+npm install -g @openai/codex
+
+# 2. ログイン (ブラウザが開きます)
+codex login
+
+# 3. 動作確認 — プロンプトが出れば認証 OK
+codex
+```
+
+`codex` を素で叩いてプロンプトが返ってくれば、`codex app-server` も同じ認証情報で動きます。Codex 側は CLI のログイン情報を使うので、`.env` の `OPENAI_API_KEY` は読みません(Realtime API 用に独立して必要)。
 
 ---
 
@@ -72,7 +130,7 @@ npm install
 # 2. 環境変数ファイルを作成
 cp .env.example .env
 
-# 3. .env を編集 (最低限 OPENAI_API_KEY を入れれば動きます)
+# 3. 必要に応じて .env を編集
 $EDITOR .env
 
 # 4. 開発サーバー起動
@@ -104,24 +162,21 @@ npm run dev
 
 ## プロジェクトの追加と切り替え
 
-リポジトリ調査やパッチ提案を試すには、対象の Git リポジトリを登録する必要があります。
+リポジトリ調査や実装を試すには、対象の Git リポジトリを登録する必要があります。
 
-### A. UI から探して追加(推奨)
+### UI から探して追加
 
-1. **Active workspace** パネルの **`Find repositories`** ボタンをクリック
+1. **Current repository** パネルの **`Find repositories`** ボタンをクリック
 2. `PROJECT_SEARCH_ROOTS` で指定したディレクトリ配下から Git リポジトリを自動検出
+   - 未指定の場合は、このアプリのリポジトリの親ディレクトリを検索します
 3. 一覧から選んで追加
-
-### B. パスを直接入力
-
-1. 入力欄に **プロジェクト名** と **絶対パス** を入力
-2. **`Add`** をクリック
 
 ### 切り替え
 
 セレクタから既存プロジェクトを選ぶだけ。プロジェクトを切り替えると:
 
-- 進行中の Realtime セッションは自動で **切断**
+- 進行中の GPT-Realtime-2 音声セッションは自動で **切断**
+- 進行中の Codex task があれば **中断**
 - 未承認のパッチは **クリア**
 - 次回 `CONNECT` 時に新しいプロジェクトのコンテキストでセッションが始まる
 
@@ -131,7 +186,7 @@ npm run dev
 
 ## 音声プリセット (Voice profile)
 
-**Voice profile** パネルで、モデルからの応答音声にブラウザ側エフェクトをかけられます。Realtime API のモデル音声プリセットは変えないので、**接続中でも切り替え可能** です。
+**Voice profile** パネルで、GPT-Realtime-2 からの応答音声にブラウザ側エフェクトをかけられます。Realtime API の音声プリセット自体は変えないので、**接続中でも切り替え可能** です。
 
 | プリセット | 雰囲気 |
 | --- | --- |
@@ -164,23 +219,62 @@ npm run dev
 ```
 
 ```
-失敗しているテストに対するパッチを提案して。ただし適用はしないで
+README の最初の見出しの直後に、簡単な紹介文を追加して
 ```
 
-UI 下部の **`INSPECT`** / **`TESTS`** ボタンは、`workspace_status` と `run_tests` をワンクリックで叩くショートカットです。
+(↑ Codex がファイル変更リクエストを承認 UI に送ってくるので、内容を見て `APPROVE` するか `DECLINE` してください)
+
+UI 下部の **`INSPECT`** / **`TESTS`** ボタンは、Codex を経由せずローカルツールを直接呼ぶショートカットです。
 
 ---
 
-## パッチ承認フロー
+## 音声割り込みと Codex task
 
-モデルがファイル変更を提案すると:
+ユーザーが話し始めると、再生中の音声応答だけを止めます。進行中の **Codex CLI app-server** task はそのまま続行します。
 
-1. 右側パネルの **`PENDING PATCH`** に統一 diff が表示される
-2. 内容を確認
-3. **`APPLY`** をクリック → `git apply` でワーキングツリーに適用
-4. 取り消したいときは **`DISCARD`**
+Codex task を止めたい場合は、音声で「止めて」「中断して」「キャンセルして」など、明示的に中断を指示してください。その場合だけ、ブラウザが進行中の `codex_task` を abort し、サーバーが `codex app-server` に `turn/interrupt` を送ります。
 
-**Apply するまでファイルは一切変更されません。** これがこのプロトタイプの安全モデルの中核です。
+---
+
+## 承認フロー
+
+Codex CLI app-server が承認を要求した **コマンド実行やファイル変更** は、画面右側のパネルに届きます。これらの操作は、ユーザーが `APPROVE` または `SESSION` を押すまで許可されません。
+
+この承認 UI は `codex app-server` から届く approval request を扱うためのものです。Codex App のデスクトップ UI や、Codex 側の将来の承認ポリシーすべてを代替するものではありません。
+
+### パネルの表示内容
+
+承認待ちが 1 件以上あると、右側パネルが自動的に **`Codex approval`** 表示に切り替わります(承認なしの間は `Pending patch` 状態)。表示される情報:
+
+- **kind**: `command` / `file change`(現行 Codex から)、`command legacy` / `file change legacy`(旧 RPC からのフォールバック。通常は発火しません)
+- **reason**: Codex が説明する目的(任意)
+- **cwd / root**: 実行ディレクトリ、または変更を許可するルート
+- **command**: 実行されるシェルコマンド(該当時)
+- **diff**: 変更内容の統一 diff(`item/fileChange/patchUpdated` 通知から自動合流)
+
+### 3 つの判断
+
+| ボタン | 意味 | スコープ |
+| --- | --- | --- |
+| **`APPROVE`** | この 1 回だけ許可 | 単発 |
+| **`SESSION`** | 同種の操作をこのセッション中まとめて許可 | 現在の Codex スレッドが終わるまで |
+| **`DECLINE`** | 拒否(Codex は別の手段を試すか、諦める) | — |
+
+`SESSION` は便利ですが、強い権限を渡すことになるので、信頼できる範囲のオペレーションだけに使ってください。プロジェクトを切り替えると承認キューも自動でクリアされます。
+
+### 承認パネルと旧 `// PATCH` パネルの関係
+
+右側のパネルは **同じ場所** で 2 種類の情報を切り替えて表示します。
+
+1. **Codex 承認(優先)**: Codex から承認リクエストが来ているとき
+2. **旧 `propose_patch` パッチ**: 内部 API 経由でローカル `propose_patch` ツールが呼ばれたとき(現状の Codex セッションでは使われません。レガシー UI として残しています)
+
+承認リクエストが複数ある場合は右上に `1/3` のような現在位置と件数が出ます。パネル内の前後ボタンでキューを移動でき、1 件処理すると残りの承認に切り替わります。
+
+### 注意点
+
+- 承認待ちはサーバーのメモリにしか保持されないため、**`npm run dev` を再起動すると承認キューは消えます**(Codex プロセスごと再起動されるので実害は少ないですが、長時間放置せず判断してください)
+- 承認 UI は 1.5 秒間隔のポーリングで更新されます。リクエストが届いてから表示まで最大 1.5 秒の遅延があります(将来的に SSE への置き換えを検討中)
 
 ---
 
@@ -190,12 +284,14 @@ UI 下部の **`INSPECT`** / **`TESTS`** ボタンは、`workspace_status` と `
 
 | 変数 | 必須 | 既定値 | 説明 |
 | --- | --- | --- | --- |
-| `OPENAI_API_KEY` | ✅ | — | `gpt-realtime-2` を利用できる OpenAI API キー |
-| `OPENAI_REALTIME_MODEL` |   | `gpt-realtime-2` | 利用する Realtime モデル ID |
-| `OPENAI_REALTIME_VOICE` |   | `marin` | モデル音声プリセット (`marin`, `cedar`, `alloy` など) |
-| `WORKSPACE_ROOT` |   | `process.cwd()` | 起動時の既定ワークスペース(プロジェクト未選択時のフォールバック) |
+| `OPENAI_API_KEY` | ✅ | — | GPT-Realtime-2 音声セッション用の OpenAI API キー |
+| `OPENAI_REALTIME_MODEL` |   | `gpt-realtime-2` | 音声会話に使う Realtime モデル |
+| `OPENAI_REALTIME_VOICE` |   | `marin` | GPT-Realtime-2 の音声プリセット (`marin`, `cedar`, `alloy` など) |
+| `CODEX_MODEL` |   | `gpt-5.4` | Codex CLI app-server のコーディング用モデル(グローバル Codex 設定より優先)。`gpt-5.5` は app-server 経由では現状未対応([詳細](#gpt-55-requires-a-newer-version-of-codex-と表示される)) |
+| `WORKSPACE_ROOT` |   | `process.cwd()` | 古い保存データの自動整理に使う既定ワークスペース |
+| `NO_PROJECT_WORKSPACE` |   | OS の一時ディレクトリ配下 | プロジェクト未選択時に Codex CLI app-server が使う空の作業ディレクトリ |
 | `PROJECTS_FILE` |   | `.voice-pair-programmer/projects.json` | 登録済みプロジェクトの保存先 |
-| `PROJECT_SEARCH_ROOTS` |   | (なし) | `Find repositories` の検索対象。`:` または `;` 区切りで複数指定可 |
+| `PROJECT_SEARCH_ROOTS` |   | このリポジトリの親ディレクトリ | `Find repositories` の検索対象。`:` または `;` 区切りで複数指定可 |
 | `TEST_COMMAND` |   | `npm test` | `run_tests` ツールが実行するコマンド |
 | `PORT` |   | `8787` | 開発サーバーのポート |
 
@@ -205,7 +301,11 @@ UI 下部の **`INSPECT`** / **`TESTS`** ボタンは、`workspace_status` と `
 
 ## トラブルシューティング
 
-### `CONNECT` を押すと `insufficient_quota` が出る
+### `CONNECT` を押すと `OPENAI_API_KEY is required` と返る
+
+`.env` に `OPENAI_API_KEY` が入っていません。Realtime API 側の認証が未設定の状態です。`.env.example` をコピーして、OpenAI ダッシュボードで発行したキーを貼り付け、`npm run dev` を再起動してください。
+
+### `CONNECT` を押すと `insufficient_quota` が返る
 
 OpenAI 側のクレジット不足、またはプロジェクト/組織のスペンドリミットに到達しています。
 
@@ -213,6 +313,47 @@ OpenAI 側のクレジット不足、またはプロジェクト/組織のスペ
 2. 上限を上げるかクレジットを追加
 3. **`npm run dev` を再起動**(`.env` の再読込のため)
 4. 改めて **`CONNECT`**
+
+### `CONNECT` を押すとモデル名やアクセス権関連のエラーが返る
+
+`gpt-realtime-2` を呼べる権限がプロジェクトに無い可能性があります。OpenAI ダッシュボードで Realtime API と `gpt-realtime-2` のアクセス状況を確認してください。組織やプロジェクト単位で権限が分かれていることがあるので、`OPENAI_API_KEY` を発行したプロジェクトが正しいかも併せて確認します。
+
+### `CONNECT` 時に Codex CLI app-server の認証エラーが出る
+
+Codex CLI の認証が通っていない可能性が高いです。
+
+1. ターミナルで `codex` を実行 → プロンプトが表示されれば認証 OK
+2. プロンプトが出ずにログインを促された場合は、`codex login` を実行してブラウザで認証
+3. `which codex` で PATH に通っていることを確認(`npm install -g @openai/codex`)
+4. **`npm run dev` を再起動**(子プロセスとして `codex app-server` を起動し直すため)
+5. 改めて **`CONNECT`**
+
+### `codex app-server` がそもそも起動しない
+
+サーバー起動時のログに `codex` の起動失敗が出ている場合、Codex CLI が古い可能性があります。`npm install -g @openai/codex@latest` で更新してください。
+
+### `gpt-5.5` requires a newer version of Codex と表示される
+
+**結論: 現状このアプリでは `gpt-5.5` は使えません。`CODEX_MODEL=gpt-5.4` を使ってください**(これが既定値です)。
+
+#### 何が起きているか
+
+このアプリは `codex app-server --listen stdio://` を子プロセスで起動し、JSON-RPC の `thread/start` で Codex セッションを開きます。`gpt-5.5` は Codex CLI 直叩き(`codex -c model='gpt-5.5'`)では動きますが、**app-server 経由(`thread/start` の `model` 指定)では現状サポートされておらず**、CLI を最新化してもこのエラーが返ります。
+
+OpenAI 公式ドキュメントも「`gpt-5.5` がまだ使えないなら `gpt-5.4` を使い続けること」を案内しています。
+
+#### 関連する上流の Issue
+
+- [openai/codex#19370](https://github.com/openai/codex/issues/19370) — GPT-5.5 not usable in Codex App for remote projects(未解決)
+- [openai/codex-plugin-cc#270](https://github.com/openai/codex-plugin-cc/issues/270) — gpt-5.5 が app-server レベルの構造化出力パスで未対応
+- [coleam00/Archon#1447](https://github.com/coleam00/Archon/issues/1447) — Codex SDK で gpt-5.5 が "requires newer version" を返す
+
+#### 対応策
+
+1. **`.env` で `CODEX_MODEL=gpt-5.4` を明示**(既定値なので未指定でも OK)
+2. Codex CLI は最新版にしておく:`npm install -g @openai/codex@latest`
+3. それでもエラーが出る場合、自動回復ロジック(`src/server/codex/index.ts:64-71`)が codex プロセスを再起動して 1 回リトライするので、**`npm run dev` 再起動は不要**
+4. 上流が `gpt-5.5` の app-server サポートを修正したら、`.env` で `CODEX_MODEL=gpt-5.5` に切り替え可能
 
 ### マイクが認識されない
 
@@ -237,18 +378,24 @@ which rg
 
 ```mermaid
 flowchart LR
-  Browser["Browser UI<br/>+ microphone"] -->|SDP offer| Server["Express<br/>App Server"]
-  Server -->|session + SDP answer| Realtime["OpenAI Realtime API<br/>gpt-realtime-2"]
+  Browser["Browser UI<br/>+ microphone"] -->|SDP offer| Server["Express"]
+  Server -->|Realtime session + SDP| Realtime["OpenAI Realtime API<br/>gpt-realtime-2"]
   Realtime -->|audio + events| Browser
-  Browser -->|function calls| Server
+  Realtime -->|codex_task tool call| Server
+  Server -->|JSONL stdio<br/>thread/start + turn/start| Codex["codex app-server"]
+  Browser -->|explicit stop only<br/>turn/interrupt| Server
+  Codex --> Workspace["Selected project<br/>or no-project temp workspace"]
+  Browser -->|manual shortcuts| Server
   Server --> Tools["git / rg / fs<br/>tests / git apply"]
 ```
 
-- ブラウザは **SDP オファー** だけをサーバーに送る
-- サーバーが OpenAI Realtime API に対してセッションを作り、**SDP アンサー** を中継
-- 以降の音声 / イベントは WebRTC で **ブラウザ ↔ OpenAI 直結**
-- 関数呼び出し(ツール実行)はデータチャネル経由でサーバーが処理
-- **API キーはサーバー側にしか存在しない**
+- ブラウザは **SDP オファー** を Express に送る
+- Express は OpenAI Realtime API (`gpt-realtime-2`) にセッションを作り、**SDP アンサー** をブラウザへ返す
+- 音声と realtime events は **ブラウザ ↔ GPT-Realtime-2** でやり取りする
+- GPT-Realtime-2 がコーディング作業を必要と判断したら `codex_task` tool call を出し、Express が `codex app-server` の `turn/start` に委譲する
+- ユーザーの発話開始は音声出力だけを止める。Codex task は「止めて」「中断して」などの明示的な中断指示、または接続切断時だけ `turn/interrupt` される
+- テキストのみの送信は、接続中は GPT-Realtime-2 の data channel、未接続時は `codex app-server` の `turn/start` を使う
+- プロジェクト未選択時は一時ディレクトリのスレッドとして起動し、実装作業は選択済みプロジェクトでのみ行う
 
 ---
 
@@ -256,8 +403,11 @@ flowchart LR
 
 | 操作 | 実行タイミング |
 | --- | --- |
-| 読み取り系ツール (`workspace_status`, `search_workspace`, `read_file`, `git_diff`, `run_tests`) | モデルからの呼び出しで即実行 |
-| ファイル変更 (`propose_patch`) | パッチを **保留**。UI で `APPLY` を押すまで適用されない |
+| ローカルショートカットツール (`INSPECT` / `TESTS` ボタンや内部 API 直叩き) | クリック時に即実行(Codex を経由しない) |
+| 音声割り込み | 再生中の音声応答だけを停止。進行中の Codex task は継続 |
+| 明示的な Codex task 中断 | 「止めて」「中断して」「キャンセルして」などの発話、または `DISCONNECT` / プロジェクト切り替え時に `turn/interrupt` を送る |
+| Codex のコマンド実行 / ファイル変更 | 承認 UI に表示し、`APPROVE` / `SESSION` / `DECLINE` を `codex app-server` に返す。**`APPROVE` または `SESSION` を押すまで実行されない** |
+| 旧ローカルツールのファイル変更 (`propose_patch`) | パッチを **保留**。UI で `APPLY` を押すまで適用されない(現状の Codex セッションでは発火しません) |
 
 `run_tests` はテストコマンドを実行するため、テストが副作用を持つプロジェクトでは挙動を確認した上で利用してください。
 
@@ -268,5 +418,5 @@ flowchart LR
 ## ライセンス / 注意事項
 
 - 検証用コードのため、本番運用は想定していません
-- OpenAI Realtime API の利用料金は OpenAI 側の課金体系に従います
+- Codex / OpenAI の利用料金は利用中のアカウントとプランに従います
 - パッチ適用は `git apply` を使うため、対象は Git ワーキングツリー配下のみ

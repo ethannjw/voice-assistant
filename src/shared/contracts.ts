@@ -23,6 +23,21 @@ export type PendingPatch = {
   createdAt: string;
 };
 
+export type CodexApprovalDecision = "accept" | "acceptForSession" | "decline";
+
+export type CodexApprovalRequest = {
+  id: string;
+  kind: "command" | "file_change" | "legacy_command" | "legacy_file_change";
+  title: string;
+  reason: string | null;
+  command: string | null;
+  cwd: string | null;
+  grantRoot: string | null;
+  diff: string | null;
+  availableDecisions: CodexApprovalDecision[];
+  createdAt: string;
+};
+
 export type ProjectConfig = {
   id: string;
   name: string;

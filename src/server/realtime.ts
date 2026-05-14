@@ -1,86 +1,29 @@
 export const REALTIME_TOOLS = [
   {
     type: "function",
-    name: "workspace_status",
-    description: "Inspect the current git status and tracked files in the local workspace.",
-    parameters: {
-      type: "object",
-      properties: {},
-      additionalProperties: false
-    }
-  },
-  {
-    type: "function",
-    name: "search_workspace",
-    description: "Search the local workspace with ripgrep. Use this before reading files.",
-    parameters: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description: "Ripgrep search pattern."
-        }
-      },
-      required: ["query"],
-      additionalProperties: false
-    }
-  },
-  {
-    type: "function",
-    name: "read_file",
-    description: "Read a UTF-8 text file from the local workspace by relative path.",
-    parameters: {
-      type: "object",
-      properties: {
-        path: {
-          type: "string",
-          description: "Relative file path inside the workspace."
-        }
-      },
-      required: ["path"],
-      additionalProperties: false
-    }
-  },
-  {
-    type: "function",
-    name: "git_diff",
-    description: "Show the current unstaged git diff for the workspace.",
-    parameters: {
-      type: "object",
-      properties: {},
-      additionalProperties: false
-    }
-  },
-  {
-    type: "function",
-    name: "run_tests",
-    description: "Run the configured project test command in the workspace.",
-    parameters: {
-      type: "object",
-      properties: {},
-      additionalProperties: false
-    }
-  },
-  {
-    type: "function",
-    name: "propose_patch",
+    name: "codex_task",
     description:
-      "Stage a unified diff for the human to review. This does not apply the patch until the user approves it in the UI.",
+      "Delegate repository investigation, command execution, implementation, or file-change work to Codex App Server. Use this for coding tasks instead of trying to solve them only in the realtime voice model.",
     parameters: {
       type: "object",
       properties: {
-        diff: {
+        task: {
           type: "string",
-          description: "A complete unified diff that can be applied with git apply."
+          description: "The concrete coding or repository task Codex should perform."
         }
       },
-      required: ["diff"],
+      required: ["task"],
       additionalProperties: false
     }
   }
 ] as const;
 
-export function buildSessionConfig(model: string, voice: string) {
+export type RealtimeProjectContext = {
+  name: string;
+  path: string;
+} | null;
+
+export function buildSessionConfig(model: string, voice: string, activeProject: RealtimeProjectContext) {
   return {
     type: "realtime",
     model,
@@ -88,7 +31,10 @@ export function buildSessionConfig(model: string, voice: string) {
     audio: {
       input: {
         turn_detection: {
-          type: "semantic_vad"
+          type: "semantic_vad",
+          eagerness: "high",
+          create_response: true,
+          interrupt_response: true
         }
       },
       output: {
@@ -96,16 +42,32 @@ export function buildSessionConfig(model: string, voice: string) {
       }
     },
     instructions: [
-      "You are a voice pair programmer connected to a local coding workspace.",
-      "Prefer inspecting the repository before proposing code changes.",
-      "Use read-only tools freely. For edits, call propose_patch with a unified diff and explain the intent briefly.",
-      "Never claim that a patch was applied until the tool result or UI confirms it.",
-      "Keep spoken responses concise. Put file paths, commands, and diffs in tool calls or short text summaries.",
+      "You are the voice layer of Voice Pair Programmer.",
+      "Use GPT-Realtime-2 for natural low-latency voice conversation.",
+      "For repository investigation, code implementation, command execution, and file changes, call codex_task so Codex App Server does the coding work.",
+      "Do not claim Codex completed a coding task until codex_task returns.",
+      formatProjectInstruction(activeProject),
+      "When no project is selected, explain that coding work requires selecting or creating a project, but normal voice chat can continue.",
+      "Keep spoken responses concise. Summarize Codex results in short practical language.",
       "Speak in a neutral, low-emotion, machine-like assistant style.",
-      "Use short declarative sentences. Avoid filler, jokes, warmth, and enthusiastic phrasing.",
-      "When the user speaks Japanese, respond in Japanese with a precise and slightly inorganic tone."
+      "Use short declarative sentences. Avoid filler, jokes, warmth, enthusiasm, and casual empathy.",
+      "Do not use expressive interjections. Do not perform friendliness. Do not add motivational comments.",
+      "When the user speaks Japanese, respond in Japanese with precise, slightly inorganic phrasing."
     ].join(" "),
     tools: REALTIME_TOOLS,
     tool_choice: "auto"
   };
+}
+
+function formatProjectInstruction(activeProject: RealtimeProjectContext) {
+  if (!activeProject) {
+    return "Current application project state: no project is selected. Do not call codex_task for repository-specific work until a project is selected.";
+  }
+
+  return [
+    "Current application project state: a project is selected.",
+    `Selected project name: ${activeProject.name}.`,
+    `Selected project path: ${activeProject.path}.`,
+    "For repository-specific requests, assume this selected project is available and call codex_task. Do not say no project is selected."
+  ].join(" ");
 }
