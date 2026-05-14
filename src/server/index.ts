@@ -20,7 +20,7 @@ const projectStorePath = path.resolve(
   process.env.PROJECTS_FILE ?? path.join(process.cwd(), ".voice-pair-programmer", "projects.json")
 );
 const realtimeModel = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2";
-const codexModel = process.env.CODEX_MODEL ?? "gpt-5.5";
+const codexModel = process.env.CODEX_MODEL ?? "gpt-5.4";
 const voice = process.env.OPENAI_REALTIME_VOICE ?? "marin";
 const projectStore = new ProjectStore(projectStorePath, defaultWorkspaceRoot);
 await projectStore.load();
