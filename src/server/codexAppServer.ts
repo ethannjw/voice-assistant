@@ -72,6 +72,19 @@ export class CodexAppServer {
   ) {}
 
   async runTextTurn(projectPath: string | null, text: string): Promise<TextTurnResult> {
+    try {
+      return await this.runTextTurnOnce(projectPath, text);
+    } catch (error) {
+      if (!isStaleCodexVersionError(error)) {
+        throw error;
+      }
+
+      this.restartProcess();
+      return await this.runTextTurnOnce(projectPath, text);
+    }
+  }
+
+  private async runTextTurnOnce(projectPath: string | null, text: string): Promise<TextTurnResult> {
     const session = await this.getThreadSession(projectPath);
     const chunks: string[] = [];
     let turnId: string | null = null;
@@ -219,6 +232,10 @@ export class CodexAppServer {
       this.stderrBuffer = `${this.stderrBuffer}${chunk}`.slice(-4000);
     });
     child.on("exit", (code, signal) => {
+      if (this.child !== child) {
+        return;
+      }
+
       const reason = `Codex App Server exited${code === null ? "" : ` with code ${code}`}${
         signal ? ` (${signal})` : ""
       }.${this.stderrBuffer ? `\n${this.stderrBuffer.trim()}` : ""}`;
@@ -229,6 +246,14 @@ export class CodexAppServer {
     });
 
     this.child = child;
+  }
+
+  private restartProcess() {
+    this.child?.kill();
+    this.child = null;
+    this.initializePromise = null;
+    this.threadSessions.clear();
+    this.rejectPending(new Error("Codex App Server was restarted."));
   }
 
   private request(method: string, params?: Record<string, unknown>, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS) {
@@ -574,6 +599,11 @@ function getAvailableDecisions(value: unknown): CodexApprovalDecision[] {
 
 function isSupportedDecision(value: unknown): value is CodexApprovalDecision {
   return value === "accept" || value === "acceptForSession" || value === "decline";
+}
+
+function isStaleCodexVersionError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("requires a newer version of Codex");
 }
 
 async function ensureNoProjectWorkspace(configuredPath?: string) {
