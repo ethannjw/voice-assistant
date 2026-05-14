@@ -274,6 +274,7 @@ Codex がリポジトリに対して **コマンドを実行したり、ファ�
 | `OPENAI_API_KEY` | ✅ | — | GPT-Realtime-2 音声セッション用の OpenAI API キー |
 | `OPENAI_REALTIME_MODEL` |   | `gpt-realtime-2` | 音声会話に使う Realtime モデル |
 | `OPENAI_REALTIME_VOICE` |   | `marin` | GPT-Realtime-2 の音声プリセット (`marin`, `cedar`, `alloy` など) |
+| `CODEX_MODEL` |   | `gpt-5.3-codex` | Codex App Server のコーディング用モデル。グローバル Codex 設定より優先 |
 | `WORKSPACE_ROOT` |   | `process.cwd()` | 古い保存データの自動整理に使う既定ワークスペース |
 | `NO_PROJECT_WORKSPACE` |   | OS の一時ディレクトリ配下 | プロジェクト未選択時に Codex App Server が使う空の作業ディレクトリ |
 | `PROJECTS_FILE` |   | `.voice-pair-programmer/projects.json` | 登録済みプロジェクトの保存先 |
@@ -317,6 +318,10 @@ Codex CLI の認証が通っていない可能性が高いです。
 ### `codex app-server` がそもそも起動しない
 
 サーバー起動時のログに `codex` の起動失敗が出ている場合、Codex CLI が古い可能性があります。`npm install -g @openai/codex@latest` で更新してください。
+
+### `gpt-5.5` requires a newer version of Codex と表示される
+
+グローバル Codex 設定の既定モデルが、手元の Codex CLI より新しい場合に発生します。このアプリは既定で `CODEX_MODEL=gpt-5.3-codex` を明示して回避します。別モデルを使う場合は `.env` に `CODEX_MODEL=...` を指定してください。
 
 ### マイクが認識されない
 

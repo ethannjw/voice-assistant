@@ -66,6 +66,7 @@ export class CodexAppServer {
 
   constructor(
     private readonly options: {
+      model?: string;
       noProjectWorkspace?: string;
     } = {}
   ) {}
@@ -161,6 +162,7 @@ export class CodexAppServer {
     await this.ensureInitialized();
     const response = (await this.request("thread/start", {
       cwd,
+      model: this.options.model,
       approvalPolicy: hasProject ? "on-request" : "never",
       approvalsReviewer: "user",
       sandbox: hasProject ? "workspace-write" : "read-only",

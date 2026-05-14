@@ -20,11 +20,13 @@ const projectStorePath = path.resolve(
   process.env.PROJECTS_FILE ?? path.join(process.cwd(), ".voice-pair-programmer", "projects.json")
 );
 const realtimeModel = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2";
+const codexModel = process.env.CODEX_MODEL ?? "gpt-5.3-codex";
 const voice = process.env.OPENAI_REALTIME_VOICE ?? "marin";
 const projectStore = new ProjectStore(projectStorePath, defaultWorkspaceRoot);
 await projectStore.load();
 const tools = new WorkspaceTools(projectStore.getActiveProject()?.path ?? null);
 const codexAppServer = new CodexAppServer({
+  model: codexModel,
   noProjectWorkspace: process.env.NO_PROJECT_WORKSPACE
 });
 const isProduction = process.env.NODE_ENV === "production";
@@ -224,6 +226,7 @@ app.listen(port, () => {
   console.log(`Workspace root: ${tools.getWorkspaceRoot() ?? "(none selected)"}`);
   console.log(`Realtime model: ${realtimeModel}`);
   console.log(`Realtime voice: ${voice}`);
+  console.log(`Codex model: ${codexModel}`);
   console.log("Codex App Server: enabled");
 });
 
