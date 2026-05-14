@@ -18,7 +18,12 @@ export const REALTIME_TOOLS = [
   }
 ] as const;
 
-export function buildSessionConfig(model: string, voice: string) {
+export type RealtimeProjectContext = {
+  name: string;
+  path: string;
+} | null;
+
+export function buildSessionConfig(model: string, voice: string, activeProject: RealtimeProjectContext) {
   return {
     type: "realtime",
     model,
@@ -41,6 +46,7 @@ export function buildSessionConfig(model: string, voice: string) {
       "Use GPT-Realtime-2 for natural low-latency voice conversation.",
       "For repository investigation, code implementation, command execution, and file changes, call codex_task so Codex App Server does the coding work.",
       "Do not claim Codex completed a coding task until codex_task returns.",
+      formatProjectInstruction(activeProject),
       "When no project is selected, explain that coding work requires selecting or creating a project, but normal voice chat can continue.",
       "Keep spoken responses concise. Summarize Codex results in short practical language.",
       "Speak in a neutral, low-emotion, machine-like assistant style.",
@@ -51,4 +57,17 @@ export function buildSessionConfig(model: string, voice: string) {
     tools: REALTIME_TOOLS,
     tool_choice: "auto"
   };
+}
+
+function formatProjectInstruction(activeProject: RealtimeProjectContext) {
+  if (!activeProject) {
+    return "Current application project state: no project is selected. Do not call codex_task for repository-specific work until a project is selected.";
+  }
+
+  return [
+    "Current application project state: a project is selected.",
+    `Selected project name: ${activeProject.name}.`,
+    `Selected project path: ${activeProject.path}.`,
+    "For repository-specific requests, assume this selected project is available and call codex_task. Do not say no project is selected."
+  ].join(" ");
 }

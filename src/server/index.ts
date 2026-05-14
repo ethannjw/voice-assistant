@@ -103,7 +103,7 @@ app.post("/api/realtime/call", async (req, res) => {
   try {
     const fd = new FormData();
     fd.set("sdp", req.body);
-    fd.set("session", JSON.stringify(buildSessionConfig(realtimeModel, voice)));
+    fd.set("session", JSON.stringify(buildSessionConfig(realtimeModel, voice, projectStore.getActiveProject())));
 
     const response = await fetch("https://api.openai.com/v1/realtime/calls", {
       method: "POST",
@@ -172,17 +172,25 @@ app.post("/api/tools/:name", async (req, res) => {
       return;
     }
 
+    const activeProject = projectStore.getActiveProject();
     const abortController = createRequestAbortController(req, res);
     try {
       const result = await codexAppServer.runTextTurn(
-        projectStore.getActiveProject()?.path ?? null,
+        activeProject?.path ?? null,
         task,
         abortController.signal
       );
       res.json({
         ok: true,
-        output: result.text || "Codex completed without a text summary.",
+        output: formatCodexTaskOutput(activeProject, result.text),
         metadata: {
+          project: activeProject
+            ? {
+                id: activeProject.id,
+                name: activeProject.name,
+                path: activeProject.path
+              }
+            : null,
           threadId: result.threadId,
           turnId: result.turnId,
           status: result.status
@@ -250,6 +258,15 @@ function createRequestAbortController(req: express.Request, res: express.Respons
   });
 
   return controller;
+}
+
+function formatCodexTaskOutput(project: ReturnType<ProjectStore["getActiveProject"]>, text: string) {
+  const projectLine = project
+    ? `Selected project: ${project.name} (${project.path})`
+    : "Selected project: none";
+  const body = text.trim() || "Codex completed without a text summary.";
+
+  return `${projectLine}\n\n${body}`;
 }
 
 async function discoverRepositories() {
