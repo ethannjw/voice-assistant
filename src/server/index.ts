@@ -94,6 +94,21 @@ app.post("/api/projects/:id/select", async (req, res) => {
   }
 });
 
+app.delete("/api/projects/:id", async (req, res) => {
+  try {
+    await projectStore.removeProject(req.params.id);
+    if (!projectStore.getActiveProject()) {
+      tools.setWorkspaceRoot(null);
+    }
+    res.json({
+      activeProject: projectStore.getActiveProject(),
+      projects: projectStore.listProjects()
+    });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
 app.post("/api/realtime/call", async (req, res) => {
   if (!process.env.OPENAI_API_KEY) {
     res.status(500).send("OPENAI_API_KEY is required for GPT-Realtime-2 voice sessions.");
