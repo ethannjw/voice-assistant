@@ -34,6 +34,7 @@ type LogEntry = {
 type RealtimeEvent = {
   type: string;
   response?: {
+    status?: string;
     output?: Array<{
       type: string;
       name?: string;
@@ -109,6 +110,10 @@ export function App() {
   const playbackAudioRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioCleanupRef = useRef<(() => void) | null>(null);
+  const assistantResponseActiveRef = useRef(false);
+  const reconnectAudioOnNextResponseRef = useRef(false);
+  const conversationRevisionRef = useRef(0);
+  const toolAbortControllersRef = useRef<Set<AbortController>>(new Set());
   const conversationRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -221,16 +226,23 @@ export function App() {
     pcRef.current?.close();
     streamRef.current?.getTracks().forEach((track) => track.stop());
     cleanupRemoteAudio();
+    for (const controller of toolAbortControllersRef.current) {
+      controller.abort();
+    }
+    toolAbortControllersRef.current.clear();
     dcRef.current = null;
     pcRef.current = null;
     streamRef.current = null;
     remoteStreamRef.current = null;
+    assistantResponseActiveRef.current = false;
+    reconnectAudioOnNextResponseRef.current = false;
     setIsDataChannelOpen(false);
     setStatus("disconnected");
   }
 
   async function connectRemoteAudio(stream: MediaStream, style: VoiceStyleId) {
     remoteStreamRef.current = stream;
+    reconnectAudioOnNextResponseRef.current = false;
 
     const audio = preparePlaybackAudio();
     if (audio.srcObject !== stream) {
@@ -333,6 +345,42 @@ export function App() {
     cleanupPlaybackAudio();
     void audioContextRef.current?.close();
     audioContextRef.current = null;
+  }
+
+  function interruptAssistantPlayback() {
+    conversationRevisionRef.current += 1;
+
+    for (const controller of toolAbortControllersRef.current) {
+      controller.abort();
+    }
+
+    const channel = dcRef.current;
+    if (channel?.readyState === "open" && assistantResponseActiveRef.current) {
+      try {
+        channel.send(JSON.stringify({ type: "response.cancel" }));
+        channel.send(JSON.stringify({ type: "output_audio_buffer.clear" }));
+      } catch (error) {
+        addLog("system", `Failed to interrupt audio output: ${String(error)}`);
+      }
+    }
+
+    assistantResponseActiveRef.current = false;
+    reconnectAudioOnNextResponseRef.current = true;
+    cleanupAudioGraph();
+    setNativePlaybackMuted(true);
+  }
+
+  function resumeAssistantPlayback() {
+    assistantResponseActiveRef.current = true;
+
+    if (!reconnectAudioOnNextResponseRef.current) {
+      return;
+    }
+
+    reconnectAudioOnNextResponseRef.current = false;
+    if (remoteStreamRef.current) {
+      void applyVoiceStyleEffect(remoteStreamRef.current, voiceStyle);
+    }
   }
 
   async function selectProject(projectId: string) {
@@ -508,6 +556,20 @@ export function App() {
       return;
     }
 
+    if (event.type === "input_audio_buffer.speech_started") {
+      interruptAssistantPlayback();
+      return;
+    }
+
+    if (event.type === "output_audio_buffer.started" || event.type === "response.output_audio.delta") {
+      resumeAssistantPlayback();
+    }
+
+    if (event.type === "output_audio_buffer.stopped" || event.type === "output_audio_buffer.cleared") {
+      assistantResponseActiveRef.current = false;
+      return;
+    }
+
     if (event.type === "conversation.item.input_audio_transcription.completed" && event.transcript) {
       addLog("user", event.transcript);
       return;
@@ -522,6 +584,11 @@ export function App() {
       return;
     }
 
+    assistantResponseActiveRef.current = false;
+    if (event.response?.status && event.response.status !== "completed") {
+      return;
+    }
+
     const calls = event.response?.output?.filter((item) => item.type === "function_call") ?? [];
     for (const call of calls) {
       if (call.name && call.call_id) {
@@ -532,6 +599,11 @@ export function App() {
 
   async function executeToolCall(name: string, callId: string | null, rawArgs: string) {
     addLog("tool", `${name}(${rawArgs})`);
+    const revisionAtStart = conversationRevisionRef.current;
+    const abortController = callId ? new AbortController() : null;
+    if (abortController) {
+      toolAbortControllersRef.current.add(abortController);
+    }
 
     let args: Record<string, unknown>;
     try {
@@ -540,12 +612,34 @@ export function App() {
       args = {};
     }
 
-    const response = await fetch(`/api/tools/${name}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(args)
-    });
-    const result = (await response.json()) as ToolResult;
+    let result: ToolResult;
+    try {
+      const response = await fetch(`/api/tools/${name}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(args),
+        signal: abortController?.signal
+      });
+      result = (await response.json()) as ToolResult;
+    } catch (error) {
+      if (abortController?.signal.aborted) {
+        result = {
+          ok: false,
+          output: "Codex App Server task was interrupted by new user speech."
+        };
+      } else {
+        result = {
+          ok: false,
+          output: error instanceof Error ? error.message : String(error)
+        };
+      }
+    } finally {
+      if (abortController) {
+        toolAbortControllersRef.current.delete(abortController);
+      }
+    }
+
+    const interrupted = abortController?.signal.aborted || conversationRevisionRef.current !== revisionAtStart;
 
     if (result.metadata?.pendingPatch) {
       setPendingPatch(result.metadata.pendingPatch as PendingPatch);
@@ -564,7 +658,9 @@ export function App() {
           }
         })
       );
-      dcRef.current?.send(JSON.stringify({ type: "response.create" }));
+      if (!interrupted) {
+        dcRef.current?.send(JSON.stringify({ type: "response.create" }));
+      }
     }
   }
 
@@ -838,7 +934,7 @@ function addLog(role: LogEntry["role"], text: string) {
         <header>
           <div>
             <p className="eyebrow">Human approval required</p>
-            <h2>{activeApproval ? "Codex approval" : "Pending patch"}</h2>
+            <h2>{activeApproval ? "Codex approval" : pendingPatch ? "Legacy patch" : "Approval queue"}</h2>
           </div>
           {activeApproval ? (
             <span className="patch-id">
@@ -958,7 +1054,7 @@ function addLog(role: LogEntry["role"], text: string) {
             </div>
           </>
         ) : (
-          <div className="empty-state">No approvals in queue — Codex requests will surface here</div>
+          <div className="empty-state">No Codex approvals in queue</div>
         )}
       </aside>
     </main>

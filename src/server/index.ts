@@ -172,8 +172,13 @@ app.post("/api/tools/:name", async (req, res) => {
       return;
     }
 
+    const abortController = createRequestAbortController(req, res);
     try {
-      const result = await codexAppServer.runTextTurn(projectStore.getActiveProject()?.path ?? null, task);
+      const result = await codexAppServer.runTextTurn(
+        projectStore.getActiveProject()?.path ?? null,
+        task,
+        abortController.signal
+      );
       res.json({
         ok: true,
         output: result.text || "Codex completed without a text summary.",
@@ -184,6 +189,9 @@ app.post("/api/tools/:name", async (req, res) => {
         }
       });
     } catch (error) {
+      if (abortController.signal.aborted || res.writableEnded) {
+        return;
+      }
       res.status(500).json({ ok: false, output: error instanceof Error ? error.message : String(error) });
     }
     return;
@@ -229,6 +237,20 @@ app.listen(port, () => {
   console.log(`Codex model: ${codexModel}`);
   console.log("Codex App Server: enabled");
 });
+
+function createRequestAbortController(req: express.Request, res: express.Response) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+
+  req.on("aborted", abort);
+  res.on("close", () => {
+    if (!res.writableEnded) {
+      abort();
+    }
+  });
+
+  return controller;
+}
 
 async function discoverRepositories() {
   const configuredRoots = String(process.env.PROJECT_SEARCH_ROOTS ?? "")

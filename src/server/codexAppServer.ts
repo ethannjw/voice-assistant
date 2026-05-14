@@ -28,11 +28,13 @@ type PendingRequest = {
 type PendingApproval = {
   messageId: RpcId;
   itemId: string | null;
+  turnId: string | null;
   request: CodexApprovalRequest;
 };
 
 type ApprovalBuild = {
   itemId: string | null;
+  turnId: string | null;
   request: CodexApprovalRequest;
 };
 
@@ -61,6 +63,7 @@ export class CodexAppServer {
   private readonly pendingRequests = new Map<RpcId, PendingRequest>();
   private readonly pendingApprovals = new Map<string, PendingApproval>();
   private readonly pendingFileDiffs = new Map<string, string>();
+  private readonly pendingTurnDiffs = new Map<string, string>();
   private readonly notificationListeners = new Set<(message: RpcMessage) => void>();
   private readonly threadSessions = new Map<string, Promise<ThreadSession>>();
 
@@ -71,23 +74,25 @@ export class CodexAppServer {
     } = {}
   ) {}
 
-  async runTextTurn(projectPath: string | null, text: string): Promise<TextTurnResult> {
+  async runTextTurn(projectPath: string | null, text: string, signal?: AbortSignal): Promise<TextTurnResult> {
     try {
-      return await this.runTextTurnOnce(projectPath, text);
+      return await this.runTextTurnOnce(projectPath, text, signal);
     } catch (error) {
       if (!isStaleCodexVersionError(error)) {
         throw error;
       }
 
       this.restartProcess();
-      return await this.runTextTurnOnce(projectPath, text);
+      return await this.runTextTurnOnce(projectPath, text, signal);
     }
   }
 
-  private async runTextTurnOnce(projectPath: string | null, text: string): Promise<TextTurnResult> {
+  private async runTextTurnOnce(projectPath: string | null, text: string, signal?: AbortSignal): Promise<TextTurnResult> {
+    throwIfAborted(signal);
     const session = await this.getThreadSession(projectPath);
     const chunks: string[] = [];
     let turnId: string | null = null;
+    let removeAbortListener: (() => void) | null = null;
 
     const unsubscribe = this.onNotification((message) => {
       if (message.method !== "item/agentMessage/delta") {
@@ -118,11 +123,27 @@ export class CodexAppServer {
       )) as { turn?: { id?: string } };
 
       turnId = response.turn?.id ?? null;
+      if (signal && turnId) {
+        const interruptTurn = () => {
+          void this.request("turn/interrupt", { threadId: session.threadId, turnId }, DEFAULT_REQUEST_TIMEOUT_MS).catch(
+            () => {}
+          );
+        };
+        signal.addEventListener("abort", interruptTurn, { once: true });
+        removeAbortListener = () => signal.removeEventListener("abort", interruptTurn);
+
+        if (signal.aborted) {
+          interruptTurn();
+          throw createAbortError();
+        }
+      }
+
       const completed = await this.waitForNotification(
         "turn/completed",
         (params) =>
           params.threadId === session.threadId && (!turnId || (params.turn as { id?: string } | undefined)?.id === turnId),
-        DEFAULT_TURN_TIMEOUT_MS
+        DEFAULT_TURN_TIMEOUT_MS,
+        signal
       );
       const turn = completed.turn as { status?: string; error?: { message?: string } } | undefined;
 
@@ -137,6 +158,7 @@ export class CodexAppServer {
         status: turn?.status ?? null
       };
     } finally {
+      removeAbortListener?.();
       unsubscribe();
     }
   }
@@ -152,6 +174,12 @@ export class CodexAppServer {
     }
 
     this.pendingApprovals.delete(id);
+    if (approval.itemId) {
+      this.pendingFileDiffs.delete(approval.itemId);
+    }
+    if (approval.turnId) {
+      this.pendingTurnDiffs.delete(approval.turnId);
+    }
     this.writeApprovalResponse(approval, decision);
     return true;
   }
@@ -365,7 +393,7 @@ export class CodexAppServer {
     }
 
     if (message.method === "item/fileChange/requestApproval") {
-      this.queueApproval(message, buildFileChangeApproval(message, this.pendingFileDiffs));
+      this.queueApproval(message, buildFileChangeApproval(message, this.pendingFileDiffs, this.pendingTurnDiffs));
       return;
     }
 
@@ -394,6 +422,23 @@ export class CodexAppServer {
   }
 
   private captureNotification(message: RpcMessage) {
+    if (message.method === "turn/diff/updated") {
+      const params = message.params ?? {};
+      const turnId = typeof params.turnId === "string" ? params.turnId : "";
+      const diff = typeof params.diff === "string" ? params.diff : "";
+      if (!turnId || !diff.trim()) {
+        return;
+      }
+
+      this.pendingTurnDiffs.set(turnId, diff);
+      for (const approval of this.pendingApprovals.values()) {
+        if (approval.request.kind === "file_change" && approval.turnId === turnId && !approval.request.diff) {
+          approval.request.diff = diff;
+        }
+      }
+      return;
+    }
+
     if (message.method !== "item/fileChange/patchUpdated") {
       return;
     }
@@ -438,6 +483,7 @@ export class CodexAppServer {
     this.pendingApprovals.set(approval.request.id, {
       messageId: message.id,
       itemId: approval.itemId,
+      turnId: approval.turnId,
       request: approval.request
     });
   }
@@ -469,23 +515,43 @@ export class CodexAppServer {
   private waitForNotification(
     method: string,
     predicate: (params: Record<string, unknown>) => boolean,
-    timeoutMs: number
+    timeoutMs: number,
+    signal?: AbortSignal
   ) {
     return new Promise<Record<string, unknown>>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(createAbortError());
+        return;
+      }
+
       const timer = setTimeout(() => {
-        unsubscribe();
+        cleanup();
         reject(new Error(`Timed out waiting for Codex App Server notification: ${method}`));
       }, timeoutMs);
+
+      const abort = () => {
+        cleanup();
+        reject(createAbortError());
+      };
 
       const unsubscribe = this.onNotification((message) => {
         if (message.method !== method || !predicate(message.params ?? {})) {
           return;
         }
 
-        clearTimeout(timer);
-        unsubscribe();
+        cleanup();
         resolve(message.params ?? {});
       });
+
+      if (signal) {
+        signal.addEventListener("abort", abort, { once: true });
+      }
+
+      function cleanup() {
+        clearTimeout(timer);
+        unsubscribe();
+        signal?.removeEventListener("abort", abort);
+      }
     });
   }
 
@@ -498,6 +564,7 @@ export class CodexAppServer {
 
     this.pendingApprovals.clear();
     this.pendingFileDiffs.clear();
+    this.pendingTurnDiffs.clear();
   }
 }
 
@@ -509,6 +576,7 @@ function buildCommandApproval(message: RpcMessage): ApprovalBuild {
 
   return {
     itemId,
+    turnId: typeof params.turnId === "string" ? params.turnId : null,
     request: {
       id: makeApprovalId("command"),
       kind: "command",
@@ -524,13 +592,19 @@ function buildCommandApproval(message: RpcMessage): ApprovalBuild {
   };
 }
 
-function buildFileChangeApproval(message: RpcMessage, pendingFileDiffs: Map<string, string>): ApprovalBuild {
+function buildFileChangeApproval(
+  message: RpcMessage,
+  pendingFileDiffs: Map<string, string>,
+  pendingTurnDiffs: Map<string, string>
+): ApprovalBuild {
   const params = message.params ?? {};
   const itemId = typeof params.itemId === "string" ? params.itemId : String(message.id ?? "");
+  const turnId = typeof params.turnId === "string" ? params.turnId : null;
   const grantRoot = typeof params.grantRoot === "string" ? params.grantRoot : null;
 
   return {
     itemId,
+    turnId,
     request: {
       id: makeApprovalId("file_change"),
       kind: "file_change",
@@ -539,7 +613,7 @@ function buildFileChangeApproval(message: RpcMessage, pendingFileDiffs: Map<stri
       command: null,
       cwd: null,
       grantRoot,
-      diff: pendingFileDiffs.get(itemId) ?? null,
+      diff: pendingFileDiffs.get(itemId) ?? (turnId ? pendingTurnDiffs.get(turnId) : null) ?? null,
       availableDecisions: ["accept", "acceptForSession", "decline"],
       createdAt: new Date().toISOString()
     }
@@ -550,6 +624,7 @@ function buildLegacyCommandApproval(message: RpcMessage): ApprovalBuild {
   const params = message.params ?? {};
   return {
     itemId: null,
+    turnId: null,
     request: {
       id: makeApprovalId("legacy_command"),
       kind: "legacy_command",
@@ -569,6 +644,7 @@ function buildLegacyFileApproval(message: RpcMessage): ApprovalBuild {
   const params = message.params ?? {};
   return {
     itemId: null,
+    turnId: null,
     request: {
       id: makeApprovalId("legacy_file_change"),
       kind: "legacy_file_change",
@@ -604,6 +680,16 @@ function isSupportedDecision(value: unknown): value is CodexApprovalDecision {
 function isStaleCodexVersionError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("requires a newer version of Codex");
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+}
+
+function createAbortError() {
+  return new DOMException("Codex App Server turn interrupted.", "AbortError");
 }
 
 async function ensureNoProjectWorkspace(configuredPath?: string) {

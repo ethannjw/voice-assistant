@@ -26,7 +26,10 @@ export function buildSessionConfig(model: string, voice: string) {
     audio: {
       input: {
         turn_detection: {
-          type: "semantic_vad"
+          type: "semantic_vad",
+          eagerness: "high",
+          create_response: true,
+          interrupt_response: true
         }
       },
       output: {
