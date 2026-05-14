@@ -7,6 +7,7 @@ import { createServer as createViteServer } from "vite";
 import type { AppConfig, CodexApprovalDecision, ToolName } from "../shared/contracts";
 import { CodexAppServer } from "./codexAppServer";
 import { ProjectStore } from "./projectStore";
+import { buildSessionConfig } from "./realtime";
 import { WorkspaceTools } from "./tools";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -18,23 +19,24 @@ const defaultWorkspaceRoot = path.resolve(process.env.WORKSPACE_ROOT ?? process.
 const projectStorePath = path.resolve(
   process.env.PROJECTS_FILE ?? path.join(process.cwd(), ".voice-pair-programmer", "projects.json")
 );
+const realtimeModel = process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2";
 const voice = process.env.OPENAI_REALTIME_VOICE ?? "marin";
 const projectStore = new ProjectStore(projectStorePath, defaultWorkspaceRoot);
 await projectStore.load();
 const tools = new WorkspaceTools(projectStore.getActiveProject()?.path ?? null);
 const codexAppServer = new CodexAppServer({
-  noProjectWorkspace: process.env.NO_PROJECT_WORKSPACE,
-  voice
+  noProjectWorkspace: process.env.NO_PROJECT_WORKSPACE
 });
 const isProduction = process.env.NODE_ENV === "production";
 
-app.use("/api/codex/realtime/call", express.text({ type: ["application/sdp", "text/plain"] }));
+app.use("/api/realtime/call", express.text({ type: ["application/sdp", "text/plain"] }));
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/config", (_req, res) => {
   const config: AppConfig = {
     activeProject: projectStore.getActiveProject(),
     projects: projectStore.listProjects(),
+    realtimeModel,
     voice
   };
   res.json(config);
@@ -90,18 +92,39 @@ app.post("/api/projects/:id/select", async (req, res) => {
   }
 });
 
-app.post("/api/codex/realtime/call", async (req, res) => {
+app.post("/api/realtime/call", async (req, res) => {
+  if (!process.env.OPENAI_API_KEY) {
+    res.status(500).send("OPENAI_API_KEY is required for GPT-Realtime-2 voice sessions.");
+    return;
+  }
+
   try {
-    const sdp = await codexAppServer.startRealtimeSession(projectStore.getActiveProject()?.path ?? null, req.body);
-    res.status(200).type("application/sdp").send(sdp);
+    const fd = new FormData();
+    fd.set("sdp", req.body);
+    fd.set("session", JSON.stringify(buildSessionConfig(realtimeModel, voice)));
+
+    const response = await fetch("https://api.openai.com/v1/realtime/calls", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "OpenAI-Safety-Identifier": "local-dev-user"
+      },
+      body: fd
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      res
+        .status(response.status)
+        .type(response.headers.get("content-type") ?? "application/json")
+        .send(text);
+      return;
+    }
+
+    res.status(response.status).type("application/sdp").send(text);
   } catch (error) {
     res.status(500).send(error instanceof Error ? error.message : String(error));
   }
-});
-
-app.post("/api/codex/realtime/stop", async (_req, res) => {
-  await codexAppServer.stopRealtimeSession();
-  res.status(204).end();
 });
 
 app.post("/api/codex/message", async (req, res) => {
@@ -140,6 +163,30 @@ app.post("/api/codex/approvals/:id", (req, res) => {
 });
 
 app.post("/api/tools/:name", async (req, res) => {
+  if (req.params.name === "codex_task") {
+    const task = typeof req.body?.task === "string" ? req.body.task.trim() : "";
+    if (!task) {
+      res.status(400).json({ ok: false, output: "codex_task requires a task string." });
+      return;
+    }
+
+    try {
+      const result = await codexAppServer.runTextTurn(projectStore.getActiveProject()?.path ?? null, task);
+      res.json({
+        ok: true,
+        output: result.text || "Codex completed without a text summary.",
+        metadata: {
+          threadId: result.threadId,
+          turnId: result.turnId,
+          status: result.status
+        }
+      });
+    } catch (error) {
+      res.status(500).json({ ok: false, output: error instanceof Error ? error.message : String(error) });
+    }
+    return;
+  }
+
   const result = await tools.call(req.params.name as ToolName, req.body ?? {});
   res.status(result.ok ? 200 : 400).json(result);
 });
@@ -175,6 +222,7 @@ if (isProduction) {
 app.listen(port, () => {
   console.log(`Voice Pair Programmer server listening on http://localhost:${port}`);
   console.log(`Workspace root: ${tools.getWorkspaceRoot() ?? "(none selected)"}`);
+  console.log(`Realtime model: ${realtimeModel}`);
   console.log(`Realtime voice: ${voice}`);
   console.log("Codex App Server: enabled");
 });

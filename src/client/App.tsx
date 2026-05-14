@@ -175,7 +175,7 @@ export function App() {
       dc.onopen = () => {
         setIsDataChannelOpen(true);
         setStatus("connected");
-        addLog("system", "Codex App Server realtime session connected. Try: 'inspect this repo'.");
+        addLog("system", "GPT-Realtime-2 voice session connected. Coding tasks will be delegated to Codex App Server.");
       };
       dc.onclose = () => {
         setIsDataChannelOpen(false);
@@ -190,7 +190,7 @@ export function App() {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      const sdpResponse = await fetch("/api/codex/realtime/call", {
+      const sdpResponse = await fetch("/api/realtime/call", {
         method: "POST",
         body: offer.sdp,
         headers: {
@@ -217,7 +217,6 @@ export function App() {
   }
 
   function disconnect() {
-    void fetch("/api/codex/realtime/stop", { method: "POST" });
     dcRef.current?.close();
     pcRef.current?.close();
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -505,7 +504,7 @@ export function App() {
 
   async function handleRealtimeEvent(event: RealtimeEvent) {
     if (event.type === "error") {
-      addLog("system", event.error?.message ?? "Codex App Server realtime error.");
+      addLog("system", event.error?.message ?? "GPT-Realtime-2 voice session error.");
       return;
     }
 

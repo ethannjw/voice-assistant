@@ -1,10 +1,20 @@
 # Voice Pair Programmer
 
-ブラウザのマイクから公式 **Codex App Server** に接続し、ローカルリポジトリを音声またはテキストで調査・実装できる検証用プロトタイプです。
+**OpenAI Realtime API (`gpt-realtime-2`)** で音声入出力を担当し、**Codex App Server** で実コーディング(リポジトリ調査・コマンド実行・ファイル編集)を担当する、二系統構成の検証用プロトタイプです。
+
+ブラウザのマイクで話しかけると、音声は WebRTC で直接 Realtime API に流れて応答が返ります。Codex に作業をさせたい指示は、Realtime のターン経由で Codex App Server に転送され、結果は承認 UI 経由でユーザーに確認されます。
 
 プロジェクト未選択でも会話だけを試せます。実装やリポジトリ調査を行う場合は、先にローカル Git リポジトリをプロジェクトとして選択します。
 
-> 🔬 これは検証用リポジトリです。実プロダクトではなく、Codex App Server と音声 UI を組み合わせたときの操作感・実装パターンを確かめることを目的にしています。
+> 🔬 これは検証用リポジトリです。実プロダクトではなく、**GPT-Realtime-2 と Codex App Server を組み合わせた音声ペアプログラミング** の操作感・実装パターンを確かめることを目的にしています。
+
+## 役割分担
+
+| コンポーネント | 担当 | 認証 |
+| --- | --- | --- |
+| **OpenAI Realtime API (`gpt-realtime-2`)** | 音声の入出力(WebRTC ↔ ブラウザ) | `OPENAI_API_KEY`(`.env`) |
+| **Codex App Server** (`codex app-server`) | リポジトリ調査・コマンド実行・ファイル編集 | Codex CLI のログイン情報 |
+| **Express (このアプリ)** | 両者を橋渡し、承認 UI、プロジェクト管理 | — |
 
 ---
 
@@ -27,7 +37,7 @@
 
 ## できること
 
-- **ブラウザ ↔ Express ↔ `codex app-server`** の双方向音声セッション
+- **ブラウザ ↔ OpenAI Realtime API** の WebRTC 音声セッション(`gpt-realtime-2`)
 - **Codex App Server** によるスレッド、ターン、会話履歴、ストリーミング応答
 - **Codex による調査・実装**: プロジェクト選択後、Codex エージェントがリポジトリを読みつつ、コマンド実行やファイル編集を承認 UI 経由で提案
 - **承認 UI**: Codex から届くコマンド実行 / ファイル変更リクエストを、`APPROVE` / `SESSION` / `DECLINE` で対話的に処理
@@ -50,14 +60,17 @@ Codex セッションとは独立して、Express が直接実行するユーテ
 
 ## 必要なもの
 
-| ツール | 用途 |
+| ツール / アカウント | 用途 |
 | --- | --- |
 | **Node.js 20+** | サーバー / クライアント実行 |
 | **npm** | 依存インストール |
-| **Codex CLI** | `codex app-server` の起動 |
+| **Codex CLI** | `codex app-server` の起動(コーディング側) |
 | **`rg` (ripgrep)** | `search_workspace` ツールに必須 |
-| **Codex のログインまたは API キー設定** | Codex App Server の認証 |
+| **OpenAI API キー(`gpt-realtime-2` 利用可)** | 音声セッション(Realtime API)の認証 |
+| **Codex のログイン** | Codex App Server の認証 |
 | **モダンブラウザ** | WebRTC + Web Audio (Chrome / Edge / Safari) |
+
+> ⚠️ `gpt-realtime-2` は OpenAI Realtime API 経由で利用するモデルです。プロジェクトに **Realtime API へのアクセス権** と **`gpt-realtime-2` の利用権限** が付与されている必要があります。組織やプロジェクトのアクセス状況は OpenAI ダッシュボードで確認してください。
 
 `rg` のインストール例:
 
@@ -68,7 +81,26 @@ brew install ripgrep
 sudo apt install ripgrep
 ```
 
-### Codex CLI のセットアップ
+### 認証は 2 系統
+
+このアプリは **音声 = Realtime API** と **コーディング = Codex App Server** の二系統で動くため、認証も 2 つ必要です。
+
+#### 1. Realtime API 用の `OPENAI_API_KEY`(音声用)
+
+ブラウザマイクからの音声セッションは、Express が **OpenAI Realtime API (`/v1/realtime/calls`) を直接叩きます**。サーバー起動時に `.env` から `OPENAI_API_KEY` を読み込み、`Authorization: Bearer …` ヘッダで使います。
+
+OpenAI ダッシュボード → **API keys** から発行したキーを `.env` に書きます:
+
+```bash
+# .env
+OPENAI_API_KEY=sk-proj-...
+OPENAI_REALTIME_MODEL=gpt-realtime-2
+OPENAI_REALTIME_VOICE=marin
+```
+
+API キーは **サーバー側にしか存在しません**(ブラウザには SDP 応答だけが返ります)。
+
+#### 2. Codex CLI のログイン(コーディング用)
 
 `npm run dev` を起動する **前に** Codex CLI の認証を済ませておきます。
 
@@ -83,7 +115,7 @@ codex login
 codex
 ```
 
-`codex` を素で叩いてプロンプトが返ってくれば、`codex app-server` も同じ認証情報で動きます。API キー方式を使う場合は Codex CLI のドキュメントに従って `OPENAI_API_KEY` を設定してください。
+`codex` を素で叩いてプロンプトが返ってくれば、`codex app-server` も同じ認証情報で動きます。Codex 側は CLI のログイン情報を使うので、`.env` の `OPENAI_API_KEY` は読みません(Realtime API 用に独立して必要)。
 
 ---
 
@@ -141,7 +173,7 @@ npm run dev
 
 セレクタから既存プロジェクトを選ぶだけ。プロジェクトを切り替えると:
 
-- 進行中の Codex App Server realtime セッションは自動で **切断**
+- 進行中の GPT-Realtime-2 音声セッションは自動で **切断**
 - 未承認のパッチは **クリア**
 - 次回 `CONNECT` 時に新しいプロジェクトのコンテキストでセッションが始まる
 
@@ -151,7 +183,7 @@ npm run dev
 
 ## 音声プリセット (Voice profile)
 
-**Voice profile** パネルで、モデルからの応答音声にブラウザ側エフェクトをかけられます。Codex App Server の realtime 音声自体は変えないので、**接続中でも切り替え可能** です。
+**Voice profile** パネルで、GPT-Realtime-2 からの応答音声にブラウザ側エフェクトをかけられます。Realtime API の音声プリセット自体は変えないので、**接続中でも切り替え可能** です。
 
 | プリセット | 雰囲気 |
 | --- | --- |
@@ -239,7 +271,9 @@ Codex がリポジトリに対して **コマンドを実行したり、ファ�
 
 | 変数 | 必須 | 既定値 | 説明 |
 | --- | --- | --- | --- |
-| `OPENAI_REALTIME_VOICE` |   | `marin` | Codex App Server realtime の音声プリセット (`marin`, `cedar`, `alloy` など) |
+| `OPENAI_API_KEY` | ✅ | — | GPT-Realtime-2 音声セッション用の OpenAI API キー |
+| `OPENAI_REALTIME_MODEL` |   | `gpt-realtime-2` | 音声会話に使う Realtime モデル |
+| `OPENAI_REALTIME_VOICE` |   | `marin` | GPT-Realtime-2 の音声プリセット (`marin`, `cedar`, `alloy` など) |
 | `WORKSPACE_ROOT` |   | `process.cwd()` | 古い保存データの自動整理に使う既定ワークスペース |
 | `NO_PROJECT_WORKSPACE` |   | OS の一時ディレクトリ配下 | プロジェクト未選択時に Codex App Server が使う空の作業ディレクトリ |
 | `PROJECTS_FILE` |   | `.voice-pair-programmer/projects.json` | 登録済みプロジェクトの保存先 |
@@ -253,7 +287,24 @@ Codex がリポジトリに対して **コマンドを実行したり、ファ�
 
 ## トラブルシューティング
 
-### `CONNECT` を押すと Codex App Server の認証エラーが出る
+### `CONNECT` を押すと `OPENAI_API_KEY is required` と返る
+
+`.env` に `OPENAI_API_KEY` が入っていません。Realtime API 側の認証が未設定の状態です。`.env.example` をコピーして、OpenAI ダッシュボードで発行したキーを貼り付け、`npm run dev` を再起動してください。
+
+### `CONNECT` を押すと `insufficient_quota` が返る
+
+OpenAI 側のクレジット不足、またはプロジェクト/組織のスペンドリミットに到達しています。
+
+1. OpenAI ダッシュボードで請求情報・残クレジット・上限額を確認
+2. 上限を上げるかクレジットを追加
+3. **`npm run dev` を再起動**(`.env` の再読込のため)
+4. 改めて **`CONNECT`**
+
+### `CONNECT` を押すとモデル名やアクセス権関連のエラーが返る
+
+`gpt-realtime-2` を呼べる権限がプロジェクトに無い可能性があります。OpenAI ダッシュボードで Realtime API と `gpt-realtime-2` のアクセス状況を確認してください。組織やプロジェクト単位で権限が分かれていることがあるので、`OPENAI_API_KEY` を発行したプロジェクトが正しいかも併せて確認します。
+
+### `CONNECT` 時に Codex App Server の認証エラーが出る
 
 Codex CLI の認証が通っていない可能性が高いです。
 
@@ -290,19 +341,21 @@ which rg
 
 ```mermaid
 flowchart LR
-  Browser["Browser UI<br/>+ microphone"] -->|SDP offer| Server["Express<br/>App Server"]
-  Server -->|JSONL stdio| Codex["codex app-server"]
-  Codex -->|SDP answer + streamed events| Server
-  Server -->|SDP answer| Browser
+  Browser["Browser UI<br/>+ microphone"] -->|SDP offer| Server["Express"]
+  Server -->|Realtime session + SDP| Realtime["OpenAI Realtime API<br/>gpt-realtime-2"]
+  Realtime -->|audio + events| Browser
+  Realtime -->|codex_task tool call| Server
+  Server -->|JSONL stdio<br/>thread/start + turn/start| Codex["codex app-server"]
   Codex --> Workspace["Selected project<br/>or no-project temp workspace"]
   Browser -->|manual shortcuts| Server
   Server --> Tools["git / rg / fs<br/>tests / git apply"]
 ```
 
 - ブラウザは **SDP オファー** を Express に送る
-- Express は `codex app-server --listen stdio://` を起動し、JSONL の JSON-RPC で `initialize` / `thread/start` / `thread/realtime/start` を呼ぶ
-- App Server から返る **SDP アンサー** を Express がブラウザへ返す
-- テキストのみの送信は `turn/start` を使い、App Server の `item/agentMessage/delta` を集約して UI に表示する
+- Express は OpenAI Realtime API (`gpt-realtime-2`) にセッションを作り、**SDP アンサー** をブラウザへ返す
+- 音声と realtime events は **ブラウザ ↔ GPT-Realtime-2** でやり取りする
+- GPT-Realtime-2 がコーディング作業を必要と判断したら `codex_task` tool call を出し、Express が Codex App Server の `turn/start` に委譲する
+- テキストのみの送信は、接続中は GPT-Realtime-2 の data channel、未接続時は Codex App Server の `turn/start` を使う
 - プロジェクト未選択時は一時ディレクトリのスレッドとして起動し、実装作業は選択済みプロジェクトでのみ行う
 
 ---

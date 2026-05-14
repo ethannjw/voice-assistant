@@ -51,7 +51,6 @@ type TextTurnResult = {
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_TURN_TIMEOUT_MS = 300_000;
-const DEFAULT_REALTIME_TIMEOUT_MS = 30_000;
 
 export class CodexAppServer {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -64,48 +63,12 @@ export class CodexAppServer {
   private readonly pendingFileDiffs = new Map<string, string>();
   private readonly notificationListeners = new Set<(message: RpcMessage) => void>();
   private readonly threadSessions = new Map<string, Promise<ThreadSession>>();
-  private activeRealtimeThreadId: string | null = null;
 
   constructor(
     private readonly options: {
       noProjectWorkspace?: string;
-      voice?: string;
     } = {}
   ) {}
-
-  async startRealtimeSession(projectPath: string | null, sdp: string) {
-    const session = await this.getThreadSession(projectPath);
-    const sdpNotification = this.waitForNotification(
-      "thread/realtime/sdp",
-      (params) => params.threadId === session.threadId,
-      DEFAULT_REALTIME_TIMEOUT_MS
-    );
-
-    await this.request("thread/realtime/start", {
-      threadId: session.threadId,
-      outputModality: "audio",
-      prompt: buildRealtimePrompt(session.hasProject),
-      transport: {
-        type: "webrtc",
-        sdp
-      },
-      voice: this.options.voice ?? "marin"
-    });
-
-    const notification = await sdpNotification;
-    this.activeRealtimeThreadId = session.threadId;
-    return String(notification.sdp ?? "");
-  }
-
-  async stopRealtimeSession() {
-    if (!this.activeRealtimeThreadId) {
-      return;
-    }
-
-    const threadId = this.activeRealtimeThreadId;
-    this.activeRealtimeThreadId = null;
-    await this.request("thread/realtime/stop", { threadId }, 10_000).catch(() => undefined);
-  }
 
   async runTextTurn(projectPath: string | null, text: string): Promise<TextTurnResult> {
     const session = await this.getThreadSession(projectPath);
@@ -632,12 +595,4 @@ function buildDeveloperInstructions(hasProject: boolean) {
     "No project is selected. You may answer general questions and help the user try the app.",
     "Do not inspect or modify a real repository until the user selects a project in the application UI."
   ].join("\n");
-}
-
-function buildRealtimePrompt(hasProject: boolean) {
-  if (hasProject) {
-    return "You are Voice Pair Programmer. Help with the selected local repository through Codex App Server. Keep spoken answers concise.";
-  }
-
-  return "You are Voice Pair Programmer. No project is selected, so answer general questions and explain that implementation requires selecting or creating a project first.";
 }
