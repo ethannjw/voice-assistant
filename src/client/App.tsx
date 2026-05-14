@@ -1,8 +1,11 @@
 import {
+  ArrowDown,
   Check,
   ChevronLeft,
   ChevronRight,
   Code2,
+  Copy,
+  Eraser,
   Folder,
   FolderPlus,
   GitPullRequest,
@@ -13,7 +16,8 @@ import {
   Play,
   Send,
   SlidersHorizontal,
-  Trash2
+  Trash2,
+  X
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type {
@@ -102,6 +106,22 @@ export function App() {
   const [isDiscoveringProjects, setIsDiscoveringProjects] = useState(false);
   const [projectCandidates, setProjectCandidates] = useState<ProjectCandidate[]>([]);
   const [projectError, setProjectError] = useState("");
+  const [micLevel, setMicLevel] = useState(0);
+  const [micPermissionError, setMicPermissionError] = useState("");
+  const [autoScroll, setAutoScroll] = useState(true);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [toasts, setToasts] = useState<Array<{ id: string; level: "info" | "error"; title: string; body: string }>>(
+    []
+  );
+  const [confirmDialog, setConfirmDialog] = useState<
+    | {
+        title: string;
+        body: string;
+        confirmLabel: string;
+        onConfirm: () => void;
+      }
+    | null
+  >(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
@@ -116,6 +136,9 @@ export function App() {
   const toolAbortControllersRef = useRef<Set<AbortController>>(new Set());
   const toolAbortReasonsRef = useRef<Map<AbortController, string>>(new Map());
   const conversationRef = useRef<HTMLDivElement | null>(null);
+  const micAnalyserRef = useRef<AnalyserNode | null>(null);
+  const micAnimationFrameRef = useRef<number | null>(null);
+  const micContextRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
     void refreshConfig();
@@ -140,8 +163,30 @@ export function App() {
     if (!node) {
       return;
     }
-    node.scrollTop = node.scrollHeight;
-  }, [logs]);
+    if (autoScroll) {
+      node.scrollTop = node.scrollHeight;
+      setUnreadCount(0);
+    } else {
+      setUnreadCount((current) => current + 1);
+    }
+  }, [logs.length]);
+
+  useEffect(() => {
+    const node = conversationRef.current;
+    if (!node) {
+      return;
+    }
+    const onScroll = () => {
+      const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
+      const atBottom = distanceFromBottom < 80;
+      setAutoScroll(atBottom);
+      if (atBottom) {
+        setUnreadCount(0);
+      }
+    };
+    node.addEventListener("scroll", onScroll);
+    return () => node.removeEventListener("scroll", onScroll);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("voice-style", voiceStyle);
@@ -150,6 +195,74 @@ export function App() {
       void applyVoiceStyleEffect(remoteStreamRef.current, voiceStyle);
     }
   }, [voiceStyle]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isEditable =
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable);
+
+      const meta = event.metaKey || event.ctrlKey;
+
+      // Cmd/Ctrl+D — Connect/Disconnect toggle
+      if (meta && event.key.toLowerCase() === "d") {
+        event.preventDefault();
+        if (status === "connected") {
+          disconnect();
+        } else if (status === "idle" || status === "disconnected" || status === "error") {
+          void connect();
+        }
+        return;
+      }
+
+      // Cmd/Ctrl+L — Clear log
+      if (meta && event.key.toLowerCase() === "l") {
+        event.preventDefault();
+        clearLogs();
+        return;
+      }
+
+      // Cmd/Ctrl+Enter — Send text
+      if (meta && event.key === "Enter") {
+        event.preventDefault();
+        void sendText();
+        return;
+      }
+
+      // Esc — Decline current approval
+      if (event.key === "Escape" && codexApprovals[activeApprovalIndex]) {
+        event.preventDefault();
+        void resolveCodexApproval(codexApprovals[activeApprovalIndex], "decline");
+        return;
+      }
+
+      // Arrow keys — Approval queue navigation
+      if (codexApprovals.length > 1 && !isEditable) {
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          setActiveApprovalIndex((current) => Math.max(current - 1, 0));
+          return;
+        }
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          setActiveApprovalIndex((current) => Math.min(current + 1, codexApprovals.length - 1));
+          return;
+        }
+      }
+
+      // Space — Toggle mute (when not in an input)
+      if (event.code === "Space" && !isEditable && status === "connected") {
+        event.preventDefault();
+        toggleMute();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [status, codexApprovals, activeApprovalIndex, input, isTextSubmitting]);
 
   async function refreshConfig() {
     try {
@@ -162,6 +275,7 @@ export function App() {
 
   async function connect() {
     setStatus("connecting");
+    setMicPermissionError("");
 
     try {
       preparePlaybackAudio();
@@ -173,9 +287,18 @@ export function App() {
         void connectRemoteAudio(remoteStream, voiceStyle);
       };
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (micError) {
+        const message = micError instanceof Error ? micError.message : String(micError);
+        setMicPermissionError(message);
+        pushToast("error", "MIC ACCESS DENIED", "Allow microphone access from the browser address bar, then retry.");
+        throw micError;
+      }
       streamRef.current = stream;
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+      startMicLevelMonitor(stream);
 
       const dc = pc.createDataChannel("oai-events");
       dc.onopen = () => {
@@ -227,6 +350,7 @@ export function App() {
     pcRef.current?.close();
     streamRef.current?.getTracks().forEach((track) => track.stop());
     cleanupRemoteAudio();
+    stopMicLevelMonitor();
     abortCodexTasks("Codex App Server task was interrupted because the realtime session disconnected.");
     toolAbortControllersRef.current.clear();
     dcRef.current = null;
@@ -236,6 +360,7 @@ export function App() {
     assistantResponseActiveRef.current = false;
     reconnectAudioOnNextResponseRef.current = false;
     setIsDataChannelOpen(false);
+    setMuted(false);
     setStatus("disconnected");
   }
 
@@ -404,85 +529,92 @@ export function App() {
       return;
     }
 
-    if (isConnected) {
-      disconnect();
-      addLog("system", "Realtime session disconnected because the active project changed.");
-    }
+    const target = config.projects.find((project) => project.id === projectId);
+    requestProjectChange(async () => {
+      if (isConnected) {
+        disconnect();
+        addLog("system", "Realtime session disconnected because the active project changed.");
+      }
 
-    setProjectError("");
-    const response = await fetch(`/api/projects/${projectId}/select`, { method: "POST" });
-    const data = await response.json();
+      setProjectError("");
+      const response = await fetch(`/api/projects/${projectId}/select`, { method: "POST" });
+      const data = await response.json();
 
-    if (!response.ok) {
-      setProjectError(String(data.error ?? "Failed to select project."));
-      return;
-    }
+      if (!response.ok) {
+        setProjectError(String(data.error ?? "Failed to select project."));
+        return;
+      }
 
-    setConfig((current) => ({
-      ...(current ?? data),
-      activeProject: data.activeProject as ProjectConfig,
-      projects: data.projects as ProjectConfig[]
-    }));
-    setPendingPatch(null);
-    setCodexApprovals([]);
-    addLog("system", `Working in ${data.activeProject.path}`);
+      setConfig((current) => ({
+        ...(current ?? data),
+        activeProject: data.activeProject as ProjectConfig,
+        projects: data.projects as ProjectConfig[]
+      }));
+      setPendingPatch(null);
+      setCodexApprovals([]);
+      addLog("system", `Working in ${data.activeProject.path}`);
+    }, `Switching to ${target?.name ?? projectId}.`);
   }
 
   async function deselectProject() {
-    if (isConnected) {
-      disconnect();
-      addLog("system", "Realtime session disconnected because the active project changed.");
-    }
+    requestProjectChange(async () => {
+      if (isConnected) {
+        disconnect();
+        addLog("system", "Realtime session disconnected because the active project changed.");
+      }
 
-    setProjectError("");
-    const response = await fetch("/api/projects/deselect", { method: "POST" });
-    const data = await response.json();
+      setProjectError("");
+      const response = await fetch("/api/projects/deselect", { method: "POST" });
+      const data = await response.json();
 
-    if (!response.ok) {
-      setProjectError(String(data.error ?? "Failed to clear the active project."));
-      return;
-    }
+      if (!response.ok) {
+        setProjectError(String(data.error ?? "Failed to clear the active project."));
+        return;
+      }
 
-    setConfig((current) => ({
-      ...(current ?? data),
-      activeProject: data.activeProject as ProjectConfig | null,
-      projects: data.projects as ProjectConfig[]
-    }));
-    setPendingPatch(null);
-    setCodexApprovals([]);
-    addLog("system", "No project selected. Voice chat remains available.");
+      setConfig((current) => ({
+        ...(current ?? data),
+        activeProject: data.activeProject as ProjectConfig | null,
+        projects: data.projects as ProjectConfig[]
+      }));
+      setPendingPatch(null);
+      setCodexApprovals([]);
+      addLog("system", "No project selected. Voice chat remains available.");
+    }, "Clearing active project.");
   }
 
   async function addProject(candidate: ProjectCandidate) {
-    if (isConnected) {
-      disconnect();
-      addLog("system", "Realtime session disconnected because the active project changed.");
-    }
+    requestProjectChange(async () => {
+      if (isConnected) {
+        disconnect();
+        addLog("system", "Realtime session disconnected because the active project changed.");
+      }
 
-    setProjectError("");
-    const response = await fetch("/api/projects", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: candidate.name,
-        path: candidate.path
-      })
-    });
-    const data = await response.json();
+      setProjectError("");
+      const response = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: candidate.name,
+          path: candidate.path
+        })
+      });
+      const data = await response.json();
 
-    if (!response.ok) {
-      setProjectError(String(data.error ?? "Failed to add project."));
-      return;
-    }
+      if (!response.ok) {
+        setProjectError(String(data.error ?? "Failed to add project."));
+        return;
+      }
 
-    setConfig((current) => ({
-      ...(current ?? data),
-      activeProject: data.activeProject as ProjectConfig,
-      projects: data.projects as ProjectConfig[]
-    }));
-    setPendingPatch(null);
-    setCodexApprovals([]);
-    addLog("system", `Added project ${data.activeProject.path}`);
+      setConfig((current) => ({
+        ...(current ?? data),
+        activeProject: data.activeProject as ProjectConfig,
+        projects: data.projects as ProjectConfig[]
+      }));
+      setPendingPatch(null);
+      setCodexApprovals([]);
+      addLog("system", `Added project ${data.activeProject.path}`);
+    }, `Adding ${candidate.name}.`);
   }
 
   async function discoverProjects() {
@@ -559,7 +691,9 @@ export function App() {
 
   async function handleRealtimeEvent(event: RealtimeEvent) {
     if (event.type === "error") {
-      addLog("system", event.error?.message ?? "GPT-Realtime-2 voice session error.");
+      const message = event.error?.message ?? "GPT-Realtime-2 voice session error.";
+      addLog("system", message);
+      pushToast("error", "REALTIME ERROR", message);
       return;
     }
 
@@ -785,6 +919,126 @@ export function App() {
     setLogs((current) => current.map((log) => (log.id === id ? { ...log, text } : log)));
   }
 
+  function clearLogs() {
+    setLogs([]);
+    setUnreadCount(0);
+  }
+
+  function pushToast(level: "info" | "error", title: string, body: string) {
+    const id = crypto.randomUUID();
+    setToasts((current) => [...current, { id, level, title, body }]);
+    window.setTimeout(() => {
+      setToasts((current) => current.filter((toast) => toast.id !== id));
+    }, 5500);
+  }
+
+  function startMicLevelMonitor(stream: MediaStream) {
+    stopMicLevelMonitor();
+    try {
+      const Ctor =
+        window.AudioContext ??
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!Ctor) return;
+      const ctx = new Ctor();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      micContextRef.current = ctx;
+      micAnalyserRef.current = analyser;
+
+      const buffer = new Uint8Array(analyser.frequencyBinCount);
+      const tick = () => {
+        const node = micAnalyserRef.current;
+        if (!node) return;
+        node.getByteTimeDomainData(buffer);
+        let sum = 0;
+        for (let i = 0; i < buffer.length; i += 1) {
+          const value = (buffer[i] - 128) / 128;
+          sum += value * value;
+        }
+        const rms = Math.sqrt(sum / buffer.length);
+        setMicLevel(Math.min(1, rms * 3));
+        micAnimationFrameRef.current = requestAnimationFrame(tick);
+      };
+      micAnimationFrameRef.current = requestAnimationFrame(tick);
+    } catch {
+      // Mic visualization is best-effort.
+    }
+  }
+
+  function stopMicLevelMonitor() {
+    if (micAnimationFrameRef.current !== null) {
+      cancelAnimationFrame(micAnimationFrameRef.current);
+      micAnimationFrameRef.current = null;
+    }
+    micAnalyserRef.current?.disconnect();
+    micAnalyserRef.current = null;
+    void micContextRef.current?.close();
+    micContextRef.current = null;
+    setMicLevel(0);
+  }
+
+  async function copyMessage(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      pushToast("info", "COPIED", "Message copied to clipboard.");
+    } catch (error) {
+      pushToast("error", "COPY FAILED", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function requestProjectChange(action: () => void | Promise<void>, summary: string) {
+    if (!isConnected) {
+      void action();
+      return;
+    }
+    setConfirmDialog({
+      title: "Disconnect realtime session?",
+      body: `${summary} The current GPT-Realtime-2 session will be disconnected.`,
+      confirmLabel: "Continue",
+      onConfirm: () => {
+        setConfirmDialog(null);
+        void action();
+      }
+    });
+  }
+
+  async function deleteProject(project: ProjectConfig) {
+    setConfirmDialog({
+      title: "Remove project?",
+      body: `${project.name} will be removed from the saved list. The repository on disk is left untouched.`,
+      confirmLabel: "Remove",
+      onConfirm: async () => {
+        setConfirmDialog(null);
+        if (project.id === config?.activeProject?.id && isConnected) {
+          disconnect();
+          addLog("system", "Realtime session disconnected because the active project was removed.");
+        }
+        const response = await fetch(`/api/projects/${project.id}`, { method: "DELETE" });
+        const data = await response.json();
+        if (!response.ok) {
+          setProjectError(String(data.error ?? "Failed to remove project."));
+          return;
+        }
+        setConfig((current) => ({
+          ...(current ?? data),
+          activeProject: data.activeProject as ProjectConfig | null,
+          projects: data.projects as ProjectConfig[]
+        }));
+        addLog("system", `Removed project ${project.name}.`);
+      }
+    });
+  }
+
+  function jumpToBottom() {
+    const node = conversationRef.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+    setAutoScroll(true);
+    setUnreadCount(0);
+  }
+
   const isConnected = status === "connected";
   const canSendText = input.trim().length > 0 && !isTextSubmitting;
   const hasProject = Boolean(config?.activeProject);
@@ -819,24 +1073,60 @@ export function App() {
           </div>
 
           <div className="project-row">
-            <label className="field-label" htmlFor="project-select">
-              Switch repository
-            </label>
-            <select
-              id="project-select"
-              value={config?.activeProject?.id ?? ""}
-              onChange={(event) => {
-                void selectProject(event.target.value);
-              }}
-              disabled={!config}
-            >
-              <option value="">No project selected</option>
-              {config?.projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name} - {project.path}
-                </option>
-              ))}
-            </select>
+            <label className="field-label">Saved repositories</label>
+            {config?.projects.length ? (
+              <ul className="project-list">
+                <li
+                  className={`project-list-item ${!config.activeProject ? "active" : ""}`}
+                >
+                  <button
+                    type="button"
+                    className="project-list-select"
+                    onClick={() => {
+                      void selectProject("");
+                    }}
+                    disabled={!config.activeProject}
+                  >
+                    <span className="project-list-name">No project selected</span>
+                    <span className="project-list-path">Voice chat only mode</span>
+                  </button>
+                </li>
+                {config.projects.map((project) => {
+                  const active = project.id === config.activeProject?.id;
+                  return (
+                    <li
+                      key={project.id}
+                      className={`project-list-item ${active ? "active" : ""}`}
+                    >
+                      <button
+                        type="button"
+                        className="project-list-select"
+                        onClick={() => {
+                          void selectProject(project.id);
+                        }}
+                      >
+                        <span className="project-list-name">{project.name}</span>
+                        <span className="project-list-path">{project.path}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="project-list-delete"
+                        title="Remove project"
+                        onClick={() => {
+                          void deleteProject(project);
+                        }}
+                      >
+                        <X size={14} />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="project-list-empty empty-state-subtitle" style={{ margin: 0 }}>
+                No saved repositories yet. Use Find repositories to add one.
+              </p>
+            )}
           </div>
 
           <div className="project-add-block">
@@ -881,17 +1171,17 @@ export function App() {
 
         <div className="controls">
           {!isConnected ? (
-            <button className="primary" type="button" onClick={connect}>
+            <button className="primary" type="button" onClick={connect} title="Connect (⌘D)">
               <Phone size={18} />
               Connect
             </button>
           ) : (
-            <button className="danger" type="button" onClick={disconnect}>
+            <button className="danger" type="button" onClick={disconnect} title="Disconnect (⌘D)">
               <PhoneOff size={18} />
               Disconnect
             </button>
           )}
-          <button type="button" onClick={toggleMute} disabled={!isConnected}>
+          <button type="button" onClick={toggleMute} disabled={!isConnected} title="Mute (Space)">
             {muted ? <MicOff size={18} /> : <Mic size={18} />}
             {muted ? "Unmute" : "Mute"}
           </button>
@@ -915,16 +1205,42 @@ export function App() {
             <Play size={18} />
             Tests
           </button>
+          {isConnected ? (
+            <div className={`mic-meter ${muted ? "muted" : ""}`} aria-label="Microphone level">
+              {Array.from({ length: 8 }, (_, index) => {
+                const threshold = (index + 1) / 8;
+                const active = !muted && micLevel >= threshold * 0.6;
+                const height = active ? 4 + Math.round(micLevel * 14) : 4;
+                return (
+                  <span
+                    key={index}
+                    className="mic-meter-bar"
+                    style={{ height: `${height}px`, opacity: active ? 0.95 : 0.25 }}
+                  />
+                );
+              })}
+            </div>
+          ) : null}
         </div>
+        {muted && isConnected ? (
+          <div className="mic-banner">
+            <MicOff size={12} /> MIC MUTED — press Space to unmute
+          </div>
+        ) : null}
+        {micPermissionError ? (
+          <div className="mic-banner">
+            ⚠ MIC ERROR: {micPermissionError}
+          </div>
+        ) : null}
 
-        <section className="voice-panel" aria-label="Voice style">
-          <div className="voice-heading">
+        <details className="voice-panel" aria-label="Voice style">
+          <summary className="voice-heading">
             <div>
               <p className="eyebrow">Voice profile</p>
               <h2>{VOICE_STYLES.find((style) => style.id === voiceStyle)?.name}</h2>
             </div>
             <SlidersHorizontal size={20} />
-          </div>
+          </summary>
           <div className="voice-style-grid">
             {VOICE_STYLES.map((style) => (
               <button
@@ -938,37 +1254,78 @@ export function App() {
               </button>
             ))}
           </div>
-        </section>
+        </details>
 
         <div className="prompt-row">
           <input
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                sendText();
-              }
+              if (event.key !== "Enter") return;
+              // Skip when IME is composing (Japanese input etc.)
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+              event.preventDefault();
+              void sendText();
             }}
-            placeholder="Ask by text when you do not want to speak"
+            placeholder="Ask by text — Enter to send, ⌘Enter from anywhere"
           />
-          <button type="button" onClick={sendText} disabled={!canSendText}>
-            <Send size={18} />
+          <button
+            type="button"
+            onClick={sendText}
+            disabled={!canSendText}
+            title="Send (⌘Enter)"
+          >
+            {isTextSubmitting ? <span className="spinner" aria-label="Sending" /> : <Send size={18} />}
           </button>
         </div>
 
         <div className="conversation-frame">
+          {logs.length > 0 ? (
+            <div className="conversation-toolbar">
+              <button type="button" className="ghost" onClick={clearLogs} title="Clear log (⌘L)">
+                <Eraser size={12} /> Clear
+              </button>
+            </div>
+          ) : null}
           <div className="conversation" ref={conversationRef}>
             {logs.length === 0 ? (
-              <div className="empty-state">Awaiting transmission — connect and engage</div>
+              <div className="empty-state">
+                <span className="empty-state-pulse">▮ ▮ ▮</span>
+                <span className="empty-state-title">Awaiting transmission</span>
+                <p className="empty-state-subtitle">
+                  GPT-Realtime-2 handles the voice link. Codex App Server handles the coding.
+                  Speak or type to start a session.
+                </p>
+                <ol className="empty-state-steps">
+                  <li>
+                    <strong>01</strong>
+                    <span>
+                      {hasProject
+                        ? `Active project: ${config?.activeProject?.name}. Ready when you are.`
+                        : "Optional: select or add a project to enable repository tools."}
+                    </span>
+                  </li>
+                  <li>
+                    <strong>02</strong>
+                    <span>
+                      Press <code>CONNECT</code> ({metaShortcutLabel("D")}) and grant microphone access.
+                    </span>
+                  </li>
+                  <li>
+                    <strong>03</strong>
+                    <span>Speak naturally, or type a request — Codex will surface approvals here.</span>
+                  </li>
+                </ol>
+              </div>
             ) : (
-              logs.map((log) => (
-                <article key={log.id} className={`message ${log.role}`}>
-                  <span>{log.role}</span>
-                  <p>{log.text}</p>
-                </article>
-              ))
+              logs.map((log) => <MessageView key={log.id} log={log} onCopy={copyMessage} />)
             )}
           </div>
+          {!autoScroll && unreadCount > 0 ? (
+            <button type="button" className="scroll-down-fab" onClick={jumpToBottom}>
+              <ArrowDown size={12} /> {unreadCount} new
+            </button>
+          ) : null}
         </div>
       </section>
 
@@ -1096,9 +1453,48 @@ export function App() {
             </div>
           </>
         ) : (
-          <div className="empty-state">No Codex approvals in queue</div>
+          <div className="empty-state">
+            <span className="empty-state-pulse">◇ ◇ ◇</span>
+            <span className="empty-state-title">Approval queue clear</span>
+            <p className="empty-state-subtitle">
+              {isConnected
+                ? hasProject
+                  ? "Codex will surface command and file-change requests here. Approve / Session / Decline to control execution."
+                  : "Select a project to let Codex inspect or modify a repository."
+                : "Connect a session to begin. Codex requests will appear here once a coding task starts."}
+            </p>
+          </div>
         )}
       </aside>
+      {toasts.length ? (
+        <div className="toast-stack" role="status" aria-live="polite">
+          {toasts.map((toast) => (
+            <div key={toast.id} className={`toast ${toast.level}`}>
+              <span className="toast-title">{toast.title}</span>
+              <span>{toast.body}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {confirmDialog ? (
+        <div
+          className="toast-stack"
+          style={{ top: "50%", right: "50%", transform: "translate(50%, -50%)", zIndex: 300 }}
+        >
+          <div className="toast info" style={{ minWidth: 360, gap: 10 }}>
+            <span className="toast-title">{confirmDialog.title}</span>
+            <span>{confirmDialog.body}</span>
+            <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+              <button className="primary" type="button" onClick={confirmDialog.onConfirm}>
+                {confirmDialog.confirmLabel}
+              </button>
+              <button type="button" onClick={() => setConfirmDialog(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
@@ -1333,4 +1729,84 @@ function formatElapsed(totalSeconds: number) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
+}
+
+function metaShortcutLabel(key: string) {
+  const isMac =
+    typeof navigator !== "undefined" && /Mac|iPhone|iPod|iPad/.test(navigator.platform || "");
+  return `${isMac ? "⌘" : "Ctrl+"}${key}`;
+}
+
+const COLLAPSED_LINE_THRESHOLD = 14;
+
+type MessageViewProps = {
+  log: LogEntry;
+  onCopy: (text: string) => void;
+};
+
+function MessageView({ log, onCopy }: MessageViewProps) {
+  const [expanded, setExpanded] = useState(false);
+  const lines = log.text.split("\n");
+  const longBody = lines.length > COLLAPSED_LINE_THRESHOLD;
+  const visible = expanded || !longBody ? log.text : `${lines.slice(0, COLLAPSED_LINE_THRESHOLD).join("\n")}\n…`;
+  const segments = parseMessageSegments(visible);
+
+  return (
+    <article className={`message ${log.role}`}>
+      <div className="message-head">
+        <span className="role">{log.role}</span>
+        <button
+          type="button"
+          className="message-copy"
+          onClick={() => onCopy(log.text)}
+          title="Copy message"
+        >
+          <Copy size={11} /> COPY
+        </button>
+      </div>
+      {segments.map((segment, index) =>
+        segment.kind === "code" ? (
+          <pre key={index} className="message-code">{segment.value}</pre>
+        ) : (
+          <p key={index}>{segment.value}</p>
+        )
+      )}
+      {longBody ? (
+        <button
+          type="button"
+          className="message-collapsed-toggle"
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded ? "▴ Collapse" : `▾ Show ${lines.length - COLLAPSED_LINE_THRESHOLD} more lines`}
+        </button>
+      ) : null}
+    </article>
+  );
+}
+
+type MessageSegment = { kind: "text" | "code"; value: string };
+
+function parseMessageSegments(text: string): MessageSegment[] {
+  const segments: MessageSegment[] = [];
+  const codeFence = /```[\w-]*\n([\s\S]*?)```/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = codeFence.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({ kind: "text", value: text.slice(lastIndex, match.index).replace(/^\n+|\n+$/g, "") });
+    }
+    segments.push({ kind: "code", value: match[1].replace(/\n+$/, "") });
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    const tail = text.slice(lastIndex).replace(/^\n+/, "");
+    if (tail) {
+      segments.push({ kind: "text", value: tail });
+    }
+  }
+  if (!segments.length) {
+    segments.push({ kind: "text", value: text });
+  }
+  return segments;
 }
