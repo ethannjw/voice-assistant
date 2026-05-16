@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CODEX_TASK_HEARTBEAT_MS } from "../constants";
 import { formatApiError } from "../lib/api";
 import { buildVoiceStyleGraph, ensureAudioContext } from "../lib/audio";
-import { formatCodexHeader } from "../lib/format";
 import { isExplicitCodexInterruptionRequest } from "../lib/intent";
-import type { CodexHeaderState, ConnectionStatus, RealtimeEvent, VoiceStyleId } from "../types";
-import type { PendingPatch, ToolResult } from "../../shared/contracts";
+import type { ConnectionStatus, RealtimeEvent, VoiceStyleId } from "../types";
+import type { PendingPatch } from "../../shared/contracts";
+import { useCodexToolExecution } from "./useCodexToolExecution";
 
 type Logger = (message: string) => void;
 
@@ -19,7 +18,6 @@ type Options = {
   onMicStreamReady: (stream: MediaStream) => void;
   onMicStreamEnded: () => void;
   onPendingPatch: (patch: PendingPatch) => void;
-  onApprovalsClear?: () => void;
 };
 
 export function useRealtimeSession({
@@ -48,8 +46,13 @@ export function useRealtimeSession({
   const assistantResponseActiveRef = useRef(false);
   const reconnectAudioOnNextResponseRef = useRef(false);
   const conversationRevisionRef = useRef(0);
-  const toolAbortControllersRef = useRef<Set<AbortController>>(new Set());
-  const toolAbortReasonsRef = useRef<Map<AbortController, string>>(new Map());
+  const { abortCodexTasks, clearAbortControllers, executeToolCall } = useCodexToolExecution({
+    addLog,
+    updateLog,
+    onPendingPatch,
+    dataChannelRef: dcRef,
+    conversationRevisionRef
+  });
 
   // ---------- Audio playback helpers ----------
 
@@ -150,18 +153,6 @@ export function useRealtimeSession({
     [applyVoiceStyleEffect, onSystemLog, preparePlaybackAudio]
   );
 
-  // ---------- Codex task abort handling ----------
-
-  const abortCodexTasks = useCallback((reason: string) => {
-    if (!toolAbortControllersRef.current.size) return false;
-    conversationRevisionRef.current += 1;
-    for (const controller of toolAbortControllersRef.current) {
-      toolAbortReasonsRef.current.set(controller, reason);
-      controller.abort();
-    }
-    return true;
-  }, []);
-
   const interruptAssistantPlayback = useCallback(() => {
     const channel = dcRef.current;
     if (channel?.readyState === "open" && assistantResponseActiveRef.current) {
@@ -186,104 +177,6 @@ export function useRealtimeSession({
       void applyVoiceStyleEffect(remoteStreamRef.current, voiceStyle);
     }
   }, [applyVoiceStyleEffect, voiceStyle]);
-
-  // ---------- Tool execution ----------
-
-  const executeToolCall = useCallback(
-    async (name: string, callId: string | null, rawArgs: string) => {
-      let args: Record<string, unknown>;
-      try {
-        args = JSON.parse(rawArgs);
-      } catch {
-        args = {};
-      }
-
-      const isCodexTask = name === "codex_task";
-      const taskSummary = isCodexTask && typeof args.task === "string" ? args.task.trim() : "";
-      const startedAt = Date.now();
-
-      const headerLogId = isCodexTask
-        ? addLog("tool", formatCodexHeader(taskSummary, 0, "running"))
-        : addLog("tool", `${name}(${rawArgs})`);
-
-      let heartbeat: number | null = null;
-      if (isCodexTask) {
-        heartbeat = window.setInterval(() => {
-          updateLog(headerLogId, formatCodexHeader(taskSummary, Date.now() - startedAt, "running"));
-        }, CODEX_TASK_HEARTBEAT_MS);
-      }
-
-      const revisionAtStart = conversationRevisionRef.current;
-      const abortController = callId ? new AbortController() : null;
-      if (abortController) {
-        toolAbortControllersRef.current.add(abortController);
-      }
-
-      let result: ToolResult;
-      try {
-        const response = await fetch(`/api/tools/${name}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(args),
-          signal: abortController?.signal
-        });
-        result = (await response.json()) as ToolResult;
-      } catch (error) {
-        if (abortController?.signal.aborted) {
-          result = {
-            ok: false,
-            output:
-              toolAbortReasonsRef.current.get(abortController) ?? "Codex App Server task was interrupted."
-          };
-        } else {
-          result = { ok: false, output: error instanceof Error ? error.message : String(error) };
-        }
-      } finally {
-        if (abortController) {
-          toolAbortControllersRef.current.delete(abortController);
-          toolAbortReasonsRef.current.delete(abortController);
-        }
-        if (heartbeat !== null) {
-          window.clearInterval(heartbeat);
-        }
-      }
-
-      const interrupted =
-        abortController?.signal.aborted || conversationRevisionRef.current !== revisionAtStart;
-
-      if (isCodexTask) {
-        const finalState: CodexHeaderState = interrupted
-          ? "interrupted"
-          : result.ok
-            ? "done"
-            : "error";
-        updateLog(headerLogId, formatCodexHeader(taskSummary, Date.now() - startedAt, finalState));
-      }
-
-      if (result.metadata?.pendingPatch) {
-        onPendingPatch(result.metadata.pendingPatch as PendingPatch);
-      }
-
-      addLog("tool", result.output || "(no output)");
-
-      if (callId) {
-        dcRef.current?.send(
-          JSON.stringify({
-            type: "conversation.item.create",
-            item: {
-              type: "function_call_output",
-              call_id: callId,
-              output: JSON.stringify(result)
-            }
-          })
-        );
-        if (!interrupted) {
-          dcRef.current?.send(JSON.stringify({ type: "response.create" }));
-        }
-      }
-    },
-    [addLog, onPendingPatch, updateLog]
-  );
 
   // ---------- Realtime event router ----------
 
@@ -353,7 +246,7 @@ export function useRealtimeSession({
     cleanupRemoteAudio();
     onMicStreamEnded();
     abortCodexTasks("Codex App Server task was interrupted because the realtime session disconnected.");
-    toolAbortControllersRef.current.clear();
+    clearAbortControllers();
     dcRef.current = null;
     pcRef.current = null;
     streamRef.current = null;
@@ -363,7 +256,7 @@ export function useRealtimeSession({
     setIsDataChannelOpen(false);
     setMuted(false);
     setStatus("disconnected");
-  }, [abortCodexTasks, cleanupRemoteAudio, onMicStreamEnded]);
+  }, [abortCodexTasks, cleanupRemoteAudio, clearAbortControllers, onMicStreamEnded]);
 
   const connect = useCallback(async () => {
     setStatus("connecting");
