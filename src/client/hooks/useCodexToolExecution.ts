@@ -36,13 +36,13 @@ export function useCodexToolExecution({
 
   const abortCodexTasks = useCallback(
     (reason: string) => {
-      if (!toolAbortControllersRef.current.size) return false;
       conversationRevisionRef.current += 1;
+      const hadActiveTasks = toolAbortControllersRef.current.size > 0;
       for (const controller of toolAbortControllersRef.current) {
         toolAbortReasonsRef.current.set(controller, reason);
         controller.abort();
       }
-      return true;
+      return hadActiveTasks;
     },
     [conversationRevisionRef]
   );
@@ -116,7 +116,7 @@ export function useCodexToolExecution({
         updateLog(headerLogId, formatCodexHeader(taskSummary, Date.now() - startedAt, finalState));
       }
 
-      if (result.metadata?.pendingPatch) {
+      if (!interrupted && result.metadata?.pendingPatch) {
         onPendingPatch(result.metadata.pendingPatch as PendingPatch);
       }
 
