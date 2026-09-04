@@ -9,6 +9,18 @@ type Listeners = {
   onProcessExit: (reason: Error) => void;
 };
 
+type Options = {
+  /** Codex config profile layered on top of the base user config (`codex --profile <name>`). */
+  profile?: string;
+};
+
+/**
+ * `--profile` is a root-level Codex CLI flag, so it must precede the `app-server` subcommand.
+ */
+function buildCodexArgs(profile?: string) {
+  return [...(profile ? ["--profile", profile] : []), "app-server", "--listen", "stdio://"];
+}
+
 /**
  * Owns the codex app-server child process and the JSON-RPC framing.
  *
@@ -24,12 +36,15 @@ export class CodexProcess {
   private stderrBuffer = "";
   private readonly pendingRequests = new Map<RpcId, PendingRequest>();
 
-  constructor(private readonly listeners: Listeners) {}
+  constructor(
+    private readonly listeners: Listeners,
+    private readonly options: Options = {}
+  ) {}
 
   ensureSpawned() {
     if (this.child) return;
 
-    const child = spawn("codex", ["app-server", "--listen", "stdio://"], {
+    const child = spawn("codex", buildCodexArgs(this.options.profile), {
       cwd: process.cwd(),
       env: process.env,
       stdio: ["pipe", "pipe", "pipe"]

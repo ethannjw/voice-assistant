@@ -17,7 +17,9 @@ export function mountRealtimeRoutes(app: Express, { projectStore, realtimeModel,
         JSON.stringify(buildSessionConfig(realtimeModel, voice, projectStore.getActiveProject()))
       );
 
-      const response = await fetch("https://api.openai.com/v1/realtime/calls", {
+      const baseUrl = (process.env.OPENAI_BASE_URL ?? "https://api.openai.com").replace(/\/+$/, "");
+      const realtimeUrl = `${baseUrl}${baseUrl.endsWith("/v1") ? "" : "/v1"}/realtime/calls`;
+      const response = await fetch(realtimeUrl, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,

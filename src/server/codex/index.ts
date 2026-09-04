@@ -21,6 +21,8 @@ import {
 
 type Options = {
   model?: string;
+  /** Codex config profile ($CODEX_HOME/<name>.config.toml) passed as `codex --profile <name>`. */
+  profile?: string;
   noProjectWorkspace?: string;
 };
 
@@ -43,16 +45,19 @@ export class CodexAppServer {
   private readonly threadSessions = new Map<string, Promise<ThreadSession>>();
 
   constructor(private readonly options: Options = {}) {
-    this.process = new CodexProcess({
-      onMessage: (message) => this.handleIncoming(message),
-      onProcessExit: () => {
-        this.initializePromise = null;
-        this.threadSessions.clear();
-        this.pendingApprovals.clear();
-        this.pendingFileDiffs.clear();
-        this.pendingTurnDiffs.clear();
-      }
-    });
+    this.process = new CodexProcess(
+      {
+        onMessage: (message) => this.handleIncoming(message),
+        onProcessExit: () => {
+          this.initializePromise = null;
+          this.threadSessions.clear();
+          this.pendingApprovals.clear();
+          this.pendingFileDiffs.clear();
+          this.pendingTurnDiffs.clear();
+        }
+      },
+      { profile: options.profile }
+    );
   }
 
   // ---------- Public API used by routes ----------
