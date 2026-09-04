@@ -14,7 +14,7 @@ export type RouteDeps = {
   tools: WorkspaceTools;
   codexAppServer: CodexAppServer;
   realtimeModel: string;
-  webSearchModel: string;
+  firecrawlBaseUrl: string;
   voice: string;
 };
 

@@ -20,7 +20,7 @@ export const REALTIME_TOOLS = [
     type: "function",
     name: "web_search",
     description:
-      "Search the public web for current or external information. Use this directly for recent facts, news, documentation, prices, schedules, and other information that may have changed.",
+      "Search the public web through Firecrawl for current or external information. Use this directly for recent facts, news, documentation, prices, schedules, and other information that may have changed.",
     parameters: {
       type: "object",
       properties: {
@@ -75,7 +75,7 @@ export function buildSessionConfig(model: string, voice: string, activeProject: 
       "You are the voice layer of Voice Pair Programmer.",
       "Use GPT-Realtime-2 for natural low-latency voice conversation.",
       "For repository investigation, code implementation, command execution, and file changes, call codex_task so Codex App Server does the coding work.",
-      "For current events, recent facts, external documentation, prices, schedules, and other public internet information, call web_search directly. Do not send web searches through codex_task.",
+      "For current events, recent facts, external documentation, prices, schedules, and other public internet information, call web_search through Firecrawl. Do not send web searches through codex_task.",
       "Do not claim Codex completed a coding task until codex_task returns.",
       formatProjectInstruction(activeProject),
       "When no project is selected, explain that coding work requires selecting or creating a project, but normal voice chat can continue.",

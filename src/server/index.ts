@@ -38,7 +38,7 @@ mountRoutes(app, {
   tools,
   codexAppServer,
   realtimeModel: env.realtimeModel,
-  webSearchModel: env.webSearchModel,
+  firecrawlBaseUrl: env.firecrawlBaseUrl,
   voice: env.voice
 });
 
@@ -65,7 +65,7 @@ app.listen(env.port, () => {
   console.log(`Workspace root: ${tools.getWorkspaceRoot() ?? "(none selected)"}`);
   console.log(`Realtime model: ${env.realtimeModel}`);
   console.log(`Realtime voice: ${env.voice}`);
-  console.log(`Web search model: ${env.webSearchModel}`);
+  console.log(`Firecrawl URL: ${env.firecrawlBaseUrl}`);
   console.log(`Codex model provider: ${env.codexModelProvider ?? "(default from config.toml)"}`);
   console.log(`Codex model: ${env.codexModel ?? "(from config.toml)"}`);
   console.log("Codex App Server: enabled");

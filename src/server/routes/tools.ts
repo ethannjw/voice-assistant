@@ -6,7 +6,7 @@ import type { RouteDeps } from "./index";
 
 export function mountToolRoutes(
   app: Express,
-  { tools, codexAppServer, projectStore, webSearchModel }: RouteDeps
+  { tools, codexAppServer, projectStore, firecrawlBaseUrl }: RouteDeps
 ) {
   app.post("/api/tools/:name", async (req, res) => {
     if (req.params.name === "codex_task") {
@@ -52,11 +52,11 @@ export function mountToolRoutes(
 
       const abortController = createRequestAbortController(req, res);
       try {
-        const result = await runWebSearch(query, webSearchModel, abortController.signal);
+        const result = await runWebSearch(query, firecrawlBaseUrl, abortController.signal);
         res.json({
           ok: true,
           output: formatWebSearchOutput(result),
-          metadata: { model: webSearchModel, sources: result.sources }
+          metadata: { provider: "firecrawl", sources: result.sources }
         });
       } catch (error) {
         if (abortController.signal.aborted || res.writableEnded) return;
