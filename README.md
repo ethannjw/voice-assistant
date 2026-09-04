@@ -1,6 +1,6 @@
 # Voice Pair Programmer
 
-**OpenAI Realtime API (`gpt-realtime-2`)** で音声入出力を担当し、**Codex CLI の `codex app-server`** で実コーディング(リポジトリ調査・コマンド実行・ファイル編集)を担当する、二系統構成の検証用プロトタイプです。
+**OpenAI Realtime API (`gpt-realtime-2`)** で音声入出力、**OpenAI Responses API** で Web 検索、**Codex CLI の `codex app-server`** で実コーディング(リポジトリ調査・コマンド実行・ファイル編集)を担当する検証用プロトタイプです。
 
 ブラウザのマイクで話しかけると、音声は WebRTC で直接 Realtime API に流れて応答が返ります。Codex に作業をさせたい指示は、Realtime のターン経由で `codex app-server` に転送され、結果は承認 UI 経由でユーザーに確認されます。
 
@@ -13,6 +13,7 @@
 | コンポーネント | 担当 | 認証 |
 | --- | --- | --- |
 | **OpenAI Realtime API (`gpt-realtime-2`)** | 音声の入出力(WebRTC ↔ ブラウザ) | `OPENAI_API_KEY`(`.env`) |
+| **OpenAI Responses API** | `web_search` による外部 Web 情報の検索 | `OPENAI_API_KEY`(`.env`) |
 | **Codex CLI app-server** (`codex app-server --listen stdio://`) | リポジトリ調査・コマンド実行・ファイル編集 | Codex CLI のログイン情報 |
 | **Express (このアプリ)** | 両者を橋渡し、承認 UI、プロジェクト管理 | — |
 
@@ -87,9 +88,9 @@ sudo apt install ripgrep
 
 このアプリは **音声 = Realtime API** と **コーディング = Codex CLI app-server** の二系統で動くため、認証も 2 つ必要です。
 
-#### 1. Realtime API 用の `OPENAI_API_KEY`(音声用)
+#### 1. OpenAI API 用の `OPENAI_API_KEY`(音声・Web 検索用)
 
-ブラウザマイクからの音声セッションは、Express が **OpenAI Realtime API (`/v1/realtime/calls`) を直接叩きます**。サーバー起動時に `.env` から `OPENAI_API_KEY` を読み込み、`Authorization: Bearer …` ヘッダで使います。
+ブラウザマイクからの音声セッションは **Realtime API (`/v1/realtime/calls`)**、`web_search` は **Responses API (`/v1/responses`)** を Express から直接叩きます。どちらも `.env` の `OPENAI_API_KEY` を `Authorization: Bearer …` ヘッダで使い、Codex App Server は経由しません。
 
 OpenAI ダッシュボード → **API keys** から発行したキーを `.env` に書きます:
 
@@ -98,6 +99,7 @@ OpenAI ダッシュボード → **API keys** から発行したキーを `.env`
 OPENAI_API_KEY=sk-proj-...
 OPENAI_REALTIME_MODEL=gpt-realtime-2
 OPENAI_REALTIME_VOICE=marin
+OPENAI_WEB_SEARCH_MODEL=gpt-5.4-mini
 ```
 
 API キーは **サーバー側にしか存在しません**(ブラウザには SDP 応答だけが返ります)。
@@ -125,11 +127,11 @@ codex
 
 | 系統 | 必要なもの |
 | --- | --- |
-| 音声 (Realtime) | ゲートウェイが `POST {OPENAI_BASE_URL}/v1/realtime/calls` を実装し、`multipart/form-data` の `sdp` + `session` を受け付けること。`OPENAI_API_KEY` はゲートウェイの資格情報になります |
+| 音声・Web 検索 (OpenAI API) | ゲートウェイが `POST {OPENAI_BASE_URL}/v1/realtime/calls` と `POST {OPENAI_BASE_URL}/v1/responses` (`web_search` 対応)を実装すること。`OPENAI_API_KEY` はゲートウェイの資格情報になります |
 | コーディング (Codex) | `~/.codex/config.toml` に `[model_providers.<name>]` を定義し、`CODEX_MODEL_PROVIDER` で選択。`wire_api` に対応するエンドポイント(`responses` なら `POST /v1/responses`)が必要 |
 | 認証 | プロバイダが `env_key` を宣言している場合、その環境変数を `.env` に置く(`codex app-server` はこのプロセスの環境を継承) |
 
-ゲートウェイが SDP 交換時の `session` パートを無視する実装だと、モデルに `codex_task` が登録されず「そのツールは知らない」という応答になります。このアプリはデータチャネルが開いた直後に `session.update` を再送して同じ設定を適用するので、その場合も tools は登録されます。接続直後のログに `Realtime tools registered: codex_task.` が出るかで確認できます。
+ゲートウェイが SDP 交換時の `session` パートを無視する実装だと、モデルに tools が登録されず「そのツールは知らない」という応答になります。このアプリはデータチャネルが開いた直後に `session.update` を再送して同じ設定を適用するので、その場合も tools は登録されます。接続直後のログに `Realtime tools registered: codex_task, web_search.` が出るかで確認できます。
 
 ---
 
@@ -296,9 +298,10 @@ Codex CLI app-server が承認を要求した **コマンド実行やファイ�
 
 | 変数 | 必須 | 既定値 | 説明 |
 | --- | --- | --- | --- |
-| `OPENAI_API_KEY` | ✅ | — | GPT-Realtime-2 音声セッション用の OpenAI API キー |
+| `OPENAI_API_KEY` | ✅ | — | GPT-Realtime-2 音声セッションと Responses API Web 検索用の OpenAI API キー |
 | `OPENAI_REALTIME_MODEL` |   | `gpt-realtime-2` | 音声会話に使う Realtime モデル |
 | `OPENAI_REALTIME_VOICE` |   | `marin` | GPT-Realtime-2 の音声プリセット (`marin`, `cedar`, `alloy` など) |
+| `OPENAI_WEB_SEARCH_MODEL` |   | `gpt-5.4-mini` | `web_search` が Responses API で使うモデル |
 | `CODEX_MODEL` |   | `gpt-5.4` | Codex CLI app-server のコーディング用モデル(グローバル Codex 設定より優先)。`gpt-5.5` は app-server 経由では現状未対応([詳細](#gpt-55-requires-a-newer-version-of-codex-と表示される)) |
 | `CODEX_MODEL_PROVIDER` |   | — | `~/.codex/config.toml` の `[model_providers.<name>]` を選択。`codex app-server -c model_provider=<name>` として渡します。**`--profile` は app-server では使えません**([詳細](#--profile-only-applies-to-runtime-commands-と表示される)) |
 | `WORKSPACE_ROOT` |   | `process.cwd()` | 古い保存データの自動整理に使う既定ワークスペース |

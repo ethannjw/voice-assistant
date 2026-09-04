@@ -15,6 +15,23 @@ export const REALTIME_TOOLS = [
       required: ["task"],
       additionalProperties: false
     }
+  },
+  {
+    type: "function",
+    name: "web_search",
+    description:
+      "Search the public web for current or external information. Use this directly for recent facts, news, documentation, prices, schedules, and other information that may have changed.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "A focused web search query containing the information the user needs."
+        }
+      },
+      required: ["query"],
+      additionalProperties: false
+    }
   }
 ] as const;
 
@@ -58,10 +75,11 @@ export function buildSessionConfig(model: string, voice: string, activeProject: 
       "You are the voice layer of Voice Pair Programmer.",
       "Use GPT-Realtime-2 for natural low-latency voice conversation.",
       "For repository investigation, code implementation, command execution, and file changes, call codex_task so Codex App Server does the coding work.",
+      "For current events, recent facts, external documentation, prices, schedules, and other public internet information, call web_search directly. Do not send web searches through codex_task.",
       "Do not claim Codex completed a coding task until codex_task returns.",
       formatProjectInstruction(activeProject),
       "When no project is selected, explain that coding work requires selecting or creating a project, but normal voice chat can continue.",
-      "Keep spoken responses concise. Summarize Codex results in short practical language.",
+      "Keep spoken responses concise. Summarize tool results in short practical language. Mention source names for web searches, but do not read raw URLs aloud unless asked.",
       "Speak in a neutral, low-emotion, machine-like assistant style.",
       "Use short declarative sentences. Avoid filler, jokes, warmth, enthusiasm, and casual empathy.",
       "Do not use expressive interjections. Do not perform friendliness. Do not add motivational comments.",

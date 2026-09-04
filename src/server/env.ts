@@ -18,6 +18,7 @@ export const env = {
     process.env.PROJECTS_FILE ?? path.join(process.cwd(), ".voice-pair-programmer", "projects.json")
   ),
   realtimeModel: process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2",
+  webSearchModel: process.env.OPENAI_WEB_SEARCH_MODEL?.trim() || "gpt-5.4-mini",
   codexModelProvider,
   // gpt-5.5 is rejected by codex app-server's thread/start as of CLI 0.130; use 5.4.
   // With a custom model_provider, set CODEX_MODEL to a model that provider serves.
