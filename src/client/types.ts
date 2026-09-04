@@ -17,6 +17,9 @@ export type RealtimeEvent = {
       arguments?: string;
     }>;
   };
+  session?: {
+    tools?: Array<{ name?: string }>;
+  };
   transcript?: string;
   delta?: string;
   item?: {

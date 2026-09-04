@@ -10,15 +10,24 @@ type Listeners = {
 };
 
 type Options = {
-  /** Codex config profile layered on top of the base user config (`codex --profile <name>`). */
-  profile?: string;
+  /** Codex `model_provider` key from ~/.codex/config.toml, passed as `-c model_provider=<name>`. */
+  modelProvider?: string;
 };
 
 /**
- * `--profile` is a root-level Codex CLI flag, so it must precede the `app-server` subcommand.
+ * Codex CLI restricts `--profile` to runtime commands (`codex`, `codex exec`, `codex mcp`, ...).
+ * As of codex-cli 0.153 `codex --profile <name> app-server` exits immediately with:
+ *   "--profile only applies to runtime commands and `codex mcp`"
+ * and `-c profile=<name>` is rejected as legacy config. So a custom provider has to be selected
+ * with an explicit `-c model_provider=<name>` override instead.
  */
-function buildCodexArgs(profile?: string) {
-  return [...(profile ? ["--profile", profile] : []), "app-server", "--listen", "stdio://"];
+function buildCodexArgs(modelProvider?: string) {
+  return [
+    "app-server",
+    ...(modelProvider ? ["-c", `model_provider=${modelProvider}`] : []),
+    "--listen",
+    "stdio://"
+  ];
 }
 
 /**
@@ -44,7 +53,7 @@ export class CodexProcess {
   ensureSpawned() {
     if (this.child) return;
 
-    const child = spawn("codex", buildCodexArgs(this.options.profile), {
+    const child = spawn("codex", buildCodexArgs(this.options.modelProvider), {
       cwd: process.cwd(),
       env: process.env,
       stdio: ["pipe", "pipe", "pipe"]

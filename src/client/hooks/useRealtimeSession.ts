@@ -43,8 +43,7 @@ export function useRealtimeSession({
   const playbackAudioRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioCleanupRef = useRef<(() => void) | null>(null);
-  const assistantResponseActiveRef = useRef(false);
-  const reconnectAudioOnNextResponseRef = useRef(false);
+  const audioGraphGenerationRef = useRef(0);
   const conversationRevisionRef = useRef(0);
   const { abortCodexTasks, clearAbortControllers, executeToolCall } = useCodexToolExecution({
     addLog,
@@ -73,6 +72,7 @@ export function useRealtimeSession({
   }, []);
 
   const cleanupAudioGraph = useCallback(() => {
+    audioGraphGenerationRef.current += 1;
     audioCleanupRef.current?.();
     audioCleanupRef.current = null;
   }, []);
@@ -96,25 +96,37 @@ export function useRealtimeSession({
   const applyVoiceStyleEffect = useCallback(
     async (stream: MediaStream, style: VoiceStyleId) => {
       cleanupAudioGraph();
+      const generation = audioGraphGenerationRef.current;
 
       if (style === "natural") {
         setNativePlaybackMuted(false);
         return;
       }
 
-      let context: AudioContext;
       try {
-        context = await ensureAudioContext(audioContextRef.current);
-        audioContextRef.current = context;
-      } catch (error) {
-        setNativePlaybackMuted(false);
-        onSystemLog(`Voice effects are unavailable. Using clean playback: ${String(error)}`);
-        return;
-      }
+        const context = await ensureAudioContext(audioContextRef.current);
+        if (generation !== audioGraphGenerationRef.current || remoteStreamRef.current !== stream) {
+          return;
+        }
 
-      const source = context.createMediaStreamSource(stream);
-      audioCleanupRef.current = buildVoiceStyleGraph(context, source, style);
-      setNativePlaybackMuted(true);
+        audioContextRef.current = context;
+        const source = context.createMediaStreamSource(stream);
+        const cleanup = buildVoiceStyleGraph(context, source, style);
+        if (generation !== audioGraphGenerationRef.current || remoteStreamRef.current !== stream) {
+          cleanup();
+          return;
+        }
+
+        audioCleanupRef.current = cleanup;
+        setNativePlaybackMuted(true);
+      } catch (error) {
+        if (generation === audioGraphGenerationRef.current) {
+          audioCleanupRef.current?.();
+          audioCleanupRef.current = null;
+          setNativePlaybackMuted(false);
+          onSystemLog(`Voice effects are unavailable. Using clean playback: ${String(error)}`);
+        }
+      }
     },
     [cleanupAudioGraph, onSystemLog, setNativePlaybackMuted]
   );
@@ -135,7 +147,6 @@ export function useRealtimeSession({
   const connectRemoteAudio = useCallback(
     async (stream: MediaStream, style: VoiceStyleId) => {
       remoteStreamRef.current = stream;
-      reconnectAudioOnNextResponseRef.current = false;
 
       const audio = preparePlaybackAudio();
       if (audio.srcObject !== stream) {
@@ -153,31 +164,6 @@ export function useRealtimeSession({
     [applyVoiceStyleEffect, onSystemLog, preparePlaybackAudio]
   );
 
-  const interruptAssistantPlayback = useCallback(() => {
-    const channel = dcRef.current;
-    if (channel?.readyState === "open" && assistantResponseActiveRef.current) {
-      try {
-        channel.send(JSON.stringify({ type: "response.cancel" }));
-        channel.send(JSON.stringify({ type: "output_audio_buffer.clear" }));
-      } catch (error) {
-        onSystemLog(`Failed to interrupt audio output: ${String(error)}`);
-      }
-    }
-    assistantResponseActiveRef.current = false;
-    reconnectAudioOnNextResponseRef.current = true;
-    cleanupAudioGraph();
-    setNativePlaybackMuted(true);
-  }, [cleanupAudioGraph, onSystemLog, setNativePlaybackMuted]);
-
-  const resumeAssistantPlayback = useCallback(() => {
-    assistantResponseActiveRef.current = true;
-    if (!reconnectAudioOnNextResponseRef.current) return;
-    reconnectAudioOnNextResponseRef.current = false;
-    if (remoteStreamRef.current) {
-      void applyVoiceStyleEffect(remoteStreamRef.current, voiceStyle);
-    }
-  }, [applyVoiceStyleEffect, voiceStyle]);
-
   // ---------- Realtime event router ----------
 
   const handleRealtimeEvent = useCallback(
@@ -189,17 +175,21 @@ export function useRealtimeSession({
         return;
       }
 
-      if (event.type === "input_audio_buffer.speech_started") {
-        interruptAssistantPlayback();
+      if (event.type === "session.updated") {
+        const toolNames = event.session?.tools?.map((tool) => tool.name).filter(Boolean) ?? [];
+        addLog(
+          "system",
+          toolNames.length
+            ? `Realtime tools registered: ${toolNames.join(", ")}.`
+            : "Realtime session updated, but no tools were registered."
+        );
         return;
       }
 
-      if (event.type === "output_audio_buffer.started" || event.type === "response.output_audio.delta") {
-        resumeAssistantPlayback();
-      }
-
-      if (event.type === "output_audio_buffer.stopped" || event.type === "output_audio_buffer.cleared") {
-        assistantResponseActiveRef.current = false;
+      if (event.type === "input_audio_buffer.speech_started") {
+        // Server-side semantic VAD owns barge-in via interrupt_response. Keep the remote
+        // stream and its audio graph connected so a false-positive VAD event cannot latch
+        // local playback into a muted state.
         return;
       }
 
@@ -224,7 +214,6 @@ export function useRealtimeSession({
 
       if (event.type !== "response.done") return;
 
-      assistantResponseActiveRef.current = false;
       if (event.response?.status && event.response.status !== "completed") return;
 
       const calls = event.response?.output?.filter((item) => item.type === "function_call") ?? [];
@@ -234,7 +223,7 @@ export function useRealtimeSession({
         }
       }
     },
-    [abortCodexTasks, addLog, executeToolCall, interruptAssistantPlayback, onRealtimeError, resumeAssistantPlayback]
+    [abortCodexTasks, addLog, executeToolCall, onRealtimeError]
   );
 
   // ---------- Connect / disconnect ----------
@@ -251,8 +240,6 @@ export function useRealtimeSession({
     pcRef.current = null;
     streamRef.current = null;
     remoteStreamRef.current = null;
-    assistantResponseActiveRef.current = false;
-    reconnectAudioOnNextResponseRef.current = false;
     setIsDataChannelOpen(false);
     setMuted(false);
     setStatus("disconnected");
@@ -265,6 +252,14 @@ export function useRealtimeSession({
       preparePlaybackAudio();
       await warmVoiceEffects(voiceStyle);
       const pc = new RTCPeerConnection();
+      pcRef.current = pc;
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === "failed") {
+          setIsDataChannelOpen(false);
+          setStatus("error");
+          onSystemLog("Realtime audio connection failed. Disconnect and reconnect the session.");
+        }
+      };
 
       pc.ontrack = (event) => {
         const remoteStream = event.streams[0] ?? new MediaStream([event.track]);
@@ -282,10 +277,31 @@ export function useRealtimeSession({
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
       onMicStreamReady(stream);
 
+      // Re-apply instructions + tools over the data channel: some Realtime endpoints and relays
+      // ignore the `session` part of the SDP exchange, which leaves the model without codex_task.
+      let sessionUpdate: unknown = null;
+      try {
+        const sessionResponse = await fetch("/api/realtime/session");
+        if (!sessionResponse.ok) {
+          throw new Error(await formatApiError(sessionResponse));
+        }
+        sessionUpdate = await sessionResponse.json();
+      } catch (error) {
+        onSystemLog(`Failed to load the realtime session config: ${String(error)}`);
+      }
+
       const dc = pc.createDataChannel("oai-events");
+      dcRef.current = dc;
       dc.onopen = () => {
         setIsDataChannelOpen(true);
         setStatus("connected");
+        if (sessionUpdate) {
+          try {
+            dc.send(JSON.stringify(sessionUpdate));
+          } catch (error) {
+            onSystemLog(`Failed to register realtime tools: ${String(error)}`);
+          }
+        }
         addLog(
           "system",
           "GPT-Realtime-2 voice session connected. Coding tasks will be delegated to Codex App Server."
@@ -318,13 +334,11 @@ export function useRealtimeSession({
         type: "answer",
         sdp: await sdpResponse.text()
       });
-
-      pcRef.current = pc;
-      dcRef.current = dc;
     } catch (error) {
-      setStatus("error");
-      addLog("system", error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
       disconnect();
+      setStatus("error");
+      addLog("system", message);
     }
   }, [
     addLog,
@@ -333,6 +347,7 @@ export function useRealtimeSession({
     handleRealtimeEvent,
     onMicError,
     onMicStreamReady,
+    onSystemLog,
     preparePlaybackAudio,
     voiceStyle,
     warmVoiceEffects

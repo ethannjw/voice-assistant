@@ -1,8 +1,13 @@
 import type { Express } from "express";
-import { buildSessionConfig } from "../realtime";
+import { buildSessionConfig, buildSessionUpdate } from "../realtime";
 import type { RouteDeps } from "./index";
 
 export function mountRealtimeRoutes(app: Express, { projectStore, realtimeModel, voice }: RouteDeps) {
+  // Session config the client re-applies over the data channel once it opens.
+  app.get("/api/realtime/session", (_req, res) => {
+    res.json(buildSessionUpdate(realtimeModel, voice, projectStore.getActiveProject()));
+  });
+
   app.post("/api/realtime/call", async (req, res) => {
     if (!process.env.OPENAI_API_KEY) {
       res.status(500).send("OPENAI_API_KEY is required for GPT-Realtime-2 voice sessions.");
@@ -10,6 +15,7 @@ export function mountRealtimeRoutes(app: Express, { projectStore, realtimeModel,
     }
 
     try {
+      const preferUdpForFirefox = /\bFirefox\/\d/i.test(req.get("user-agent") ?? "");
       const fd = new FormData();
       fd.set("sdp", req.body);
       fd.set(
@@ -23,7 +29,8 @@ export function mountRealtimeRoutes(app: Express, { projectStore, realtimeModel,
         method: "POST",
         headers: {
           Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          "OpenAI-Safety-Identifier": "local-dev-user"
+          "OpenAI-Safety-Identifier": "local-dev-user",
+          ...(preferUdpForFirefox ? { "X-Amp-Realtime-ICE-Transport": "udp" } : {})
         },
         body: fd
       });

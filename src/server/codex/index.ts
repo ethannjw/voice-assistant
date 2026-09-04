@@ -21,8 +21,8 @@ import {
 
 type Options = {
   model?: string;
-  /** Codex config profile ($CODEX_HOME/<name>.config.toml) passed as `codex --profile <name>`. */
-  profile?: string;
+  /** Codex `model_provider` name from ~/.codex/config.toml (e.g. a local bridge provider). */
+  modelProvider?: string;
   noProjectWorkspace?: string;
 };
 
@@ -56,7 +56,7 @@ export class CodexAppServer {
           this.pendingTurnDiffs.clear();
         }
       },
-      { profile: options.profile }
+      { modelProvider: options.modelProvider }
     );
   }
 

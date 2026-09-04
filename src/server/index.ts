@@ -21,7 +21,7 @@ await projectStore.load();
 const tools = new WorkspaceTools(projectStore.getActiveProject()?.path ?? null);
 const codexAppServer = new CodexAppServer({
   model: env.codexModel,
-  profile: env.codexProfile,
+  modelProvider: env.codexModelProvider,
   noProjectWorkspace: env.noProjectWorkspace
 });
 
@@ -64,7 +64,7 @@ app.listen(env.port, () => {
   console.log(`Workspace root: ${tools.getWorkspaceRoot() ?? "(none selected)"}`);
   console.log(`Realtime model: ${env.realtimeModel}`);
   console.log(`Realtime voice: ${env.voice}`);
-  console.log(`Codex profile: ${env.codexProfile ?? "(none)"}`);
-  console.log(`Codex model: ${env.codexModel ?? "(from profile/config)"}`);
+  console.log(`Codex model provider: ${env.codexModelProvider ?? "(default from config.toml)"}`);
+  console.log(`Codex model: ${env.codexModel ?? "(from config.toml)"}`);
   console.log("Codex App Server: enabled");
 });

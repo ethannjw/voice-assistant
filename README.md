@@ -119,6 +119,18 @@ codex
 
 `codex` を素で叩いてプロンプトが返ってくれば、`codex app-server` も同じ認証情報で動きます。Codex 側は CLI のログイン情報を使うので、`.env` の `OPENAI_API_KEY` は読みません(Realtime API 用に独立して必要)。
 
+#### 3. ローカルゲートウェイ経由で使う場合(任意)
+
+`OPENAI_BASE_URL` を OpenAI 以外(社内ゲートウェイ等)に向ける構成では、**音声側とコーディング側の両方**でそのゲートウェイに要件があります。
+
+| 系統 | 必要なもの |
+| --- | --- |
+| 音声 (Realtime) | ゲートウェイが `POST {OPENAI_BASE_URL}/v1/realtime/calls` を実装し、`multipart/form-data` の `sdp` + `session` を受け付けること。`OPENAI_API_KEY` はゲートウェイの資格情報になります |
+| コーディング (Codex) | `~/.codex/config.toml` に `[model_providers.<name>]` を定義し、`CODEX_MODEL_PROVIDER` で選択。`wire_api` に対応するエンドポイント(`responses` なら `POST /v1/responses`)が必要 |
+| 認証 | プロバイダが `env_key` を宣言している場合、その環境変数を `.env` に置く(`codex app-server` はこのプロセスの環境を継承) |
+
+ゲートウェイが SDP 交換時の `session` パートを無視する実装だと、モデルに `codex_task` が登録されず「そのツールは知らない」という応答になります。このアプリはデータチャネルが開いた直後に `session.update` を再送して同じ設定を適用するので、その場合も tools は登録されます。接続直後のログに `Realtime tools registered: codex_task.` が出るかで確認できます。
+
 ---
 
 ## 3 分セットアップ
@@ -288,12 +300,22 @@ Codex CLI app-server が承認を要求した **コマンド実行やファイ�
 | `OPENAI_REALTIME_MODEL` |   | `gpt-realtime-2` | 音声会話に使う Realtime モデル |
 | `OPENAI_REALTIME_VOICE` |   | `marin` | GPT-Realtime-2 の音声プリセット (`marin`, `cedar`, `alloy` など) |
 | `CODEX_MODEL` |   | `gpt-5.4` | Codex CLI app-server のコーディング用モデル(グローバル Codex 設定より優先)。`gpt-5.5` は app-server 経由では現状未対応([詳細](#gpt-55-requires-a-newer-version-of-codex-と表示される)) |
+| `CODEX_MODEL_PROVIDER` |   | — | `~/.codex/config.toml` の `[model_providers.<name>]` を選択。`codex app-server -c model_provider=<name>` として渡します。**`--profile` は app-server では使えません**([詳細](#--profile-only-applies-to-runtime-commands-と表示される)) |
 | `WORKSPACE_ROOT` |   | `process.cwd()` | 古い保存データの自動整理に使う既定ワークスペース |
 | `NO_PROJECT_WORKSPACE` |   | OS の一時ディレクトリ配下 | プロジェクト未選択時に Codex CLI app-server が使う空の作業ディレクトリ |
 | `PROJECTS_FILE` |   | `.voice-pair-programmer/projects.json` | 登録済みプロジェクトの保存先 |
 | `PROJECT_SEARCH_ROOTS` |   | このリポジトリの親ディレクトリ | `Find repositories` の検索対象。`:` または `;` 区切りで複数指定可 |
 | `TEST_COMMAND` |   | `npm test` | `run_tests` ツールが実行するコマンド |
 | `PORT` |   | `8787` | 開発サーバーのポート |
+
+選択した `model_provider` が `env_key = "..."` を宣言している場合、その環境変数も `.env` に入れる必要があります。`codex app-server` はこのサーバープロセスの環境をそのまま継承するため、`.env` に無いと Codex のターンが `Missing environment variable: ...` で失敗します。
+
+```bash
+# 例: [model_providers.amp] が env_key = "AMP_BRIDGE_API_KEY" の場合
+CODEX_MODEL_PROVIDER=amp
+CODEX_MODEL=<そのプロバイダが提供するモデル>
+AMP_BRIDGE_API_KEY=amp-bridge-local
+```
 
 `.env.example` をコピーしてから編集するのが一番手早いです。
 
@@ -327,6 +349,24 @@ Codex CLI の認証が通っていない可能性が高いです。
 3. `which codex` で PATH に通っていることを確認(`npm install -g @openai/codex`)
 4. **`npm run dev` を再起動**(子プロセスとして `codex app-server` を起動し直すため)
 5. 改めて **`CONNECT`**
+
+### `--profile only applies to runtime commands` と表示される
+
+Codex CLI は `--profile` を **runtime コマンド**(`codex`, `codex exec`, `codex review`, `codex mcp` など)にしか許可しておらず、`app-server` では受け付けません。0.153 系では `codex --profile <name> app-server` は即座に終了し、`initialize` がタイムアウトします。`-c profile=<name>` も legacy 設定として拒否されます。
+
+カスタムプロバイダを使う場合は、profile ではなく `model_provider` を直接指定します。
+
+```bash
+# .env
+CODEX_MODEL_PROVIDER=amp
+CODEX_MODEL=<そのプロバイダのモデル名>
+```
+
+アプリは内部で `codex app-server -c model_provider=<name> --listen stdio://` を起動します。
+
+### `Missing environment variable: ...` と表示される
+
+`~/.codex/config.toml` の `[model_providers.<name>]` に `env_key` が設定されていて、その環境変数がこのサーバープロセスに無い状態です。`.env` に追加して `npm run dev` を再起動してください(`codex app-server` は子プロセスとして環境を継承します)。
 
 ### `codex app-server` がそもそも起動しない
 

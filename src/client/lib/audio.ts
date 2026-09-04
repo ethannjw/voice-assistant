@@ -15,7 +15,7 @@ export async function ensureAudioContext(current: AudioContext | null): Promise<
   if (!Ctor) {
     throw new Error("Web Audio is not available in this browser.");
   }
-  const context = current ?? new Ctor();
+  const context = !current || current.state === "closed" ? new Ctor() : current;
   if (context.state === "suspended") {
     await context.resume();
   }

@@ -23,6 +23,19 @@ export type RealtimeProjectContext = {
   path: string;
 } | null;
 
+/**
+ * `session.update` payload sent over the data channel right after it opens.
+ *
+ * The same config is already attached to the SDP exchange, but not every Realtime endpoint
+ * (notably relays/gateways in front of the API) applies the multipart `session` part. Re-sending
+ * it on the data channel is idempotent and guarantees tools + instructions are registered.
+ * `model` is omitted: it selects the endpoint at call creation and is not updatable mid-session.
+ */
+export function buildSessionUpdate(model: string, voice: string, activeProject: RealtimeProjectContext) {
+  const { model: _model, ...session } = buildSessionConfig(model, voice, activeProject);
+  return { type: "session.update", session };
+}
+
 export function buildSessionConfig(model: string, voice: string, activeProject: RealtimeProjectContext) {
   return {
     type: "realtime",
@@ -32,7 +45,7 @@ export function buildSessionConfig(model: string, voice: string, activeProject: 
       input: {
         turn_detection: {
           type: "semantic_vad",
-          eagerness: "high",
+          eagerness: "medium",
           create_response: true,
           interrupt_response: true
         }

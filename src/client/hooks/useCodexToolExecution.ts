@@ -70,6 +70,7 @@ export function useCodexToolExecution({
       }
 
       const revisionAtStart = conversationRevisionRef.current;
+      const originChannel = dataChannelRef.current;
       const abortController = callId ? new AbortController() : null;
       if (abortController) {
         toolAbortControllersRef.current.add(abortController);
@@ -122,19 +123,33 @@ export function useCodexToolExecution({
 
       addLog("tool", result.output || "(no output)");
 
-      if (callId) {
-        dataChannelRef.current?.send(
-          JSON.stringify({
-            type: "conversation.item.create",
-            item: {
-              type: "function_call_output",
-              call_id: callId,
-              output: JSON.stringify(result)
-            }
-          })
-        );
-        if (!interrupted) {
-          dataChannelRef.current?.send(JSON.stringify({ type: "response.create" }));
+      if (
+        callId &&
+        originChannel &&
+        dataChannelRef.current === originChannel &&
+        originChannel.readyState === "open"
+      ) {
+        try {
+          originChannel.send(
+            JSON.stringify({
+              type: "conversation.item.create",
+              item: {
+                type: "function_call_output",
+                call_id: callId,
+                output: JSON.stringify(result)
+              }
+            })
+          );
+          if (!interrupted && originChannel.readyState === "open") {
+            originChannel.send(JSON.stringify({ type: "response.create" }));
+          }
+        } catch (error) {
+          addLog(
+            "system",
+            `Could not return tool output to the realtime session: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
         }
       }
     },
