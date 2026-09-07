@@ -4,3 +4,4 @@ dist
 .voice-pair-programmer
 .DS_Store
 *.log
+.idea/**
