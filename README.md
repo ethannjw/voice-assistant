@@ -169,12 +169,12 @@ Open **<http://localhost:8787>** in your browser.
 2. Confirm that the status in the upper-right corner is **`IDLE`**.
 3. Click the green **`CONNECT`** button.
 4. Allow microphone access when the browser prompts you for permission.
-5. The connection is ready when the status changes to **`CONNECTED`**.
+5. The connection is ready when the status changes to **`CONNECTED`**. Elva automatically greets you when the voice connection is ready.
 6. Speak into the microphone or send text through the input field at the bottom.
 
-Try saying:
+Address the assistant by its wake name and try saying:
 
-> "Hello, are you there?"
+> "Elva, hello, are you there?"
 
 If you hear a spoken response, the connection is working. Voice chat works even when no project is selected.
 
@@ -252,7 +252,7 @@ The **`INSPECT`** and **`TESTS`** buttons at the bottom of the UI are shortcuts 
 
 ## Voice Interruption and Codex Tasks
 
-When you begin speaking, the application stops only the currently playing audio response. An active **Codex CLI app-server** task continues running.
+Elva responds or calls tools only when the latest utterance addresses her by name. When you begin speaking, the application stops only the currently playing audio response. An active **Codex CLI app-server** task continues running.
 
 To stop a Codex task, explicitly say something such as “stop,” “interrupt,” or “cancel.” Only then does the browser abort the active `codex_task` and the server send `turn/interrupt` to `codex app-server`.
 

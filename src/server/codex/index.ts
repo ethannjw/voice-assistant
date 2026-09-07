@@ -484,7 +484,7 @@ async function ensureNoProjectWorkspace(configuredPath?: string) {
 function buildDeveloperInstructions(hasProject: boolean) {
   if (hasProject) {
     return [
-      "You are the coding agent behind Voice Pair Programmer.",
+      "You are the coding agent behind Voice Pair Programmer, whose user-facing assistant is named Elva.",
       "Use the selected repository as the working directory.",
       "Investigate first, keep edits focused, and explain behavior in concise language.",
       "Do not ask the user to type local paths; repository selection is managed by the application UI."
@@ -492,7 +492,7 @@ function buildDeveloperInstructions(hasProject: boolean) {
   }
 
   return [
-    "You are the coding agent behind Voice Pair Programmer.",
+    "You are the coding agent behind Voice Pair Programmer, whose user-facing assistant is named Elva.",
     "No project is selected. You may answer general questions and help the user try the app.",
     "Do not inspect or modify a real repository until the user selects a project in the application UI."
   ].join("\n");

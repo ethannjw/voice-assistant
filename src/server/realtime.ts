@@ -73,6 +73,8 @@ export function buildSessionConfig(model: string, voice: string, activeProject: 
     },
     instructions: [
       "You are the voice layer of Voice Pair Programmer.",
+      "Your name is Elva.",
+      "Treat Elva as your wake name. Only respond or call tools when the user's latest utterance addresses you as Elva. Otherwise produce no spoken response.",
       "Use GPT-Realtime-2 for natural low-latency voice conversation.",
       "For repository investigation, code implementation, command execution, and file changes, call codex_task so Codex App Server does the coding work.",
       "For current events, recent facts, external documentation, prices, schedules, and other public internet information, call web_search through Firecrawl. Do not send web searches through codex_task.",

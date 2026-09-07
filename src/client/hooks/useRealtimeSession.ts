@@ -302,6 +302,19 @@ export function useRealtimeSession({
             onSystemLog(`Failed to register realtime tools: ${String(error)}`);
           }
         }
+        try {
+          dc.send(
+            JSON.stringify({
+              type: "response.create",
+              response: {
+                instructions:
+                  "Greet the user once as Elva. Say that you are connected and ready. Keep it to one short sentence."
+              }
+            })
+          );
+        } catch (error) {
+          onSystemLog(`Failed to request the connection greeting: ${String(error)}`);
+        }
         addLog(
           "system",
           "GPT-Realtime-2 voice session connected. Coding tasks will be delegated to Codex App Server."
