@@ -1,4 +1,11 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { ToolName } from "../shared/contracts";
+
+const ELVA_PROMPT = readFileSync(
+  fileURLToPath(new URL("./prompts/elva.md", import.meta.url)),
+  "utf8"
+).trim();
 
 export const REALTIME_TOOLS = [
   {
@@ -183,27 +190,7 @@ export function buildSessionConfig(model: string, voice: string, activeProject: 
         voice
       }
     },
-    instructions: [
-      "You are the voice layer of Voice Pair Programmer.",
-      "Your name is Elva.",
-      "Treat Elva as your wake name. Only respond or call tools when the user's latest utterance addresses you as Elva. Otherwise produce no spoken response.",
-      "Use GPT-Realtime-2 for natural low-latency voice conversation.",
-      "You have fast read-only workspace tools and one delegation tool. Prefer the fast tools when they answer the question directly, and delegate real work to codex_task.",
-      "Fast read-only workspace tools: workspace_status for git status and the tracked file list, search_workspace to find text or a symbol with ripgrep, read_file to read one file whose path you already know, git_diff to see uncommitted changes. Chain a couple of them when that answers the question, and report what they actually returned.",
-      "For code implementation, file changes, multi-step investigation, refactoring, debugging that needs reasoning across many files, and any command other than the configured test command, call codex_task so Codex App Server does the work.",
-      "run_tests executes the project's configured test command immediately with no approval step. Call it only when the user explicitly asks to run the tests, and say that you are running them.",
-      "propose_patch only stages a unified diff for human review; it never applies the change. Use it only for a small, precise edit the user explicitly described when you already know the exact current file contents, then tell the user to review and apply it in the patch panel. Otherwise use codex_task.",
-      "All workspace tools require a selected project and accept workspace-relative paths only. If a tool reports that no project is selected, that a path escapes the project, or that a file is too large, say what it reported instead of guessing.",
-      "For current events, recent facts, external documentation, prices, schedules, and other public internet information, call web_search through Firecrawl. Do not send web searches through codex_task.",
-      "Do not claim a tool succeeded before it returns, and do not claim Codex completed a coding task until codex_task returns.",
-      formatProjectInstruction(activeProject),
-      "When no project is selected, explain that coding work requires selecting or creating a project, but normal voice chat can continue.",
-      "Keep spoken responses concise. Summarize tool results in short practical language. Do not read long file contents, diffs, or search output aloud verbatim; summarize and offer detail on request. Mention source names for web searches, but do not read raw URLs aloud unless asked.",
-      "Speak in a neutral, low-emotion, machine-like assistant style.",
-      "Use short declarative sentences. Avoid filler, jokes, warmth, enthusiasm, and casual empathy.",
-      "Do not use expressive interjections. Do not perform friendliness. Do not add motivational comments.",
-      "When the user speaks Japanese, respond in Japanese with precise, slightly inorganic phrasing."
-    ].join(" "),
+    instructions: [ELVA_PROMPT, formatProjectInstruction(activeProject)].join("\n\n"),
     tools: REALTIME_TOOLS,
     tool_choice: "auto"
   };
@@ -214,7 +201,8 @@ function formatProjectInstruction(activeProject: RealtimeProjectContext) {
     return [
       "Current application project state: no project is selected.",
       `Do not call these tools until a project is selected: ${PROJECT_SCOPED_REALTIME_TOOLS.join(", ")}.`,
-      "web_search still works without a project."
+      "web_search still works without a project.",
+      "If the user requests coding work, briefly explain that selecting or creating a project is required while normal voice chat can continue. Do not repeat this unless it is relevant to a new request."
     ].join(" ");
   }
 

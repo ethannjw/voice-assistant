@@ -1,8 +1,9 @@
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { PROJECT_SCOPED_REALTIME_TOOLS, REALTIME_TOOLS } from "../src/server/realtime";
 import { WORKSPACE_TOOL_NAMES, type ToolResult } from "../src/shared/contracts";
-import { e2eWorkspace } from "./support/paths";
+import { e2eWorkspace, repositoryRoot } from "./support/paths";
 import { installRealtimeBrowserFakes } from "./support/realtime-browser";
 import { deselectWorkspace, selectE2eWorkspace } from "./support/workspace";
 
@@ -142,6 +143,36 @@ test.describe("realtime tool registry", () => {
       "All workspace tools require a selected project and accept workspace-relative paths only."
     );
     expect(session.instructions).toContain("a project is selected.");
+  });
+
+  test("lets Elva infer when the user is clearly speaking to her", async ({ request }) => {
+    const response = await request.get("/api/realtime/session");
+    const { session } = (await response.json()) as RealtimeSessionUpdate;
+
+    expect(session.instructions).toContain(
+      "do not require the name when conversational context makes it reasonably clear the user is speaking to you"
+    );
+    expect(session.instructions).toContain(
+      "Respond to direct questions, commands, and follow-ups that are obviously meant for you"
+    );
+    expect(session.instructions).toContain(
+      "If it is genuinely unclear whether the user is speaking to you, give one brief, gentle clarification"
+    );
+    expect(session.instructions).toContain("Do not repeatedly remind the user to say Elva");
+    expect(session.instructions).not.toContain(
+      "Only respond or call tools when the user's latest utterance addresses you as Elva"
+    );
+  });
+
+  test("loads Elva's static instructions from one Markdown prompt", async ({ request }) => {
+    const prompt = (
+      await readFile(path.join(repositoryRoot, "src/server/prompts/elva.md"), "utf8")
+    ).trim();
+    const response = await request.get("/api/realtime/session");
+    const { session } = (await response.json()) as RealtimeSessionUpdate;
+
+    expect(session.instructions).toContain(prompt);
+    expect(session.instructions.match(/no project is selected/g)).toHaveLength(1);
   });
 
   test("withholds the project-scoped tools while no project is selected", async ({ request }) => {

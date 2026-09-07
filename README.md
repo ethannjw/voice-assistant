@@ -70,7 +70,7 @@ The same local tools are registered with the Realtime model, so you can also ask
 
 ## Realtime Tools
 
-Every tool the application implements is registered with the Realtime session, so Elva can answer directly instead of routing every request through Codex. The registry lives in `REALTIME_TOOLS` in `src/server/realtime.ts` and is sent both in the SDP exchange and again as `session.update` when the data channel opens.
+Every tool the application implements is registered with the Realtime session, so Elva can answer directly instead of routing every request through Codex. The registry lives in `REALTIME_TOOLS` in `src/server/realtime.ts` and is sent both in the SDP exchange and again as `session.update` when the data channel opens. Elva's static voice instructions live in `src/server/prompts/elva.md`; the server appends the current project context at runtime.
 
 | Tool | What it does | Approval | Needs a project |
 | --- | --- | --- | --- |
@@ -326,9 +326,11 @@ Open **<http://localhost:8787>** in your browser.
 5. The connection is ready when the status changes to **`CONNECTED`**. Elva automatically greets you when the voice connection is ready.
 6. Speak into the microphone or send text through the input field at the bottom.
 
-Address the assistant by its wake name and try saying:
+You can address the assistant by its wake name and try saying:
 
 > "Elva, hello, are you there?"
+
+Elva also responds when a direct question, command, or follow-up is clearly meant for her. If it is genuinely unclear, she may ask one brief clarification instead of repeatedly asking you to use her name.
 
 If you hear a spoken response, the connection is working. Voice chat works even when no project is selected.
 
@@ -415,7 +417,7 @@ The **`INSPECT`** and **`TESTS`** buttons at the bottom of the UI are shortcuts 
 
 ## Voice Interruption and Codex Tasks
 
-Elva responds or calls tools only when the latest utterance addresses her by name. When you begin speaking, the application stops only the currently playing audio response. An active **Codex CLI app-server** task continues running.
+Elva responds when you use her name or when conversational context makes it clear that a question, command, or follow-up is directed at her. She stays silent for clear background conversation or speech directed elsewhere. If the target is genuinely unclear, she may ask one brief, gentle clarification without repeatedly insisting that you say “Elva.” When you begin speaking, the application stops only the currently playing audio response. An active **Codex CLI app-server** task continues running.
 
 To stop a Codex task, explicitly say something such as “stop,” “interrupt,” or “cancel.” Only then does the browser abort the active `codex_task` and the server send `turn/interrupt` to `codex app-server`.
 
