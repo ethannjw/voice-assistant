@@ -66,8 +66,8 @@ function ConversationEmptyState({
       <span className="empty-state-pulse">▮ ▮ ▮</span>
       <span className="empty-state-title">Awaiting transmission</span>
       <p className="empty-state-subtitle">
-        GPT-Realtime-2 handles the voice link. Codex App Server handles the coding. Speak or type to start
-        a session.
+        GPT-Realtime-2 handles the voice link. The configured coding agent handles implementation.
+        Speak or type to start a session.
       </p>
       <ol className="empty-state-steps">
         <li>
@@ -86,7 +86,7 @@ function ConversationEmptyState({
         </li>
         <li>
           <strong>03</strong>
-          <span>Speak naturally, or type a request — Codex will surface approvals here.</span>
+          <span>Speak naturally, or type a request — coding approvals appear here.</span>
         </li>
       </ol>
     </div>

@@ -2,10 +2,15 @@ import type { Express } from "express";
 import { buildSessionConfig, buildSessionUpdate } from "../realtime";
 import type { RouteDeps } from "./index";
 
-export function mountRealtimeRoutes(app: Express, { projectStore, realtimeModel, voice }: RouteDeps) {
+export function mountRealtimeRoutes(
+  app: Express,
+  { projectStore, realtimeModel, voice, codingAgentName }: RouteDeps
+) {
   // Session config the client re-applies over the data channel once it opens.
   app.get("/api/realtime/session", (_req, res) => {
-    res.json(buildSessionUpdate(realtimeModel, voice, projectStore.getActiveProject()));
+    res.json(
+      buildSessionUpdate(realtimeModel, voice, projectStore.getActiveProject(), codingAgentName)
+    );
   });
 
   app.post("/api/realtime/call", async (req, res) => {
@@ -20,7 +25,9 @@ export function mountRealtimeRoutes(app: Express, { projectStore, realtimeModel,
       fd.set("sdp", req.body);
       fd.set(
         "session",
-        JSON.stringify(buildSessionConfig(realtimeModel, voice, projectStore.getActiveProject()))
+        JSON.stringify(
+          buildSessionConfig(realtimeModel, voice, projectStore.getActiveProject(), codingAgentName)
+        )
       );
 
       const baseUrl = (process.env.OPENAI_BASE_URL ?? "https://api.openai.com").replace(/\/+$/, "");

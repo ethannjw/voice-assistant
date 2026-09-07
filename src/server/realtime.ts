@@ -1,17 +1,18 @@
 import type { ToolName } from "../shared/contracts";
+import type { CodingAgentName } from "../shared/contracts";
 
 export const REALTIME_TOOLS = [
   {
     type: "function",
-    name: "codex_task",
+    name: "coding_task",
     description:
-      "Delegate repository investigation, command execution, implementation, or file-change work to Codex App Server. Use this for coding tasks instead of trying to solve them only in the realtime voice model.",
+      "Delegate repository investigation, command execution, implementation, or file-change work to the configured coding agent. Use this for coding tasks instead of trying to solve them only in the realtime voice model.",
     parameters: {
       type: "object",
       properties: {
         task: {
           type: "string",
-          description: "The concrete coding or repository task Codex should perform."
+          description: "The concrete coding or repository task the configured coding agent should perform."
         }
       },
       required: ["task"],
@@ -93,7 +94,7 @@ export const REALTIME_TOOLS = [
     type: "function",
     name: "propose_patch",
     description:
-      "Stage a unified diff for human review in the patch panel. It is never applied automatically; the user must press APPLY. Use it only for a small, precise change the user explicitly described, and only when you already know the exact current file contents. For anything larger, multi-file, or requiring investigation, use codex_task instead.",
+      "Stage a unified diff for human review in the patch panel. It is never applied automatically; the user must press APPLY. Use it only for a small, precise change the user explicitly described, and only when you already know the exact current file contents. For anything larger, multi-file, or requiring investigation, use coding_task instead.",
     parameters: {
       type: "object",
       properties: {
@@ -138,7 +139,7 @@ void _everyWorkspaceToolIsExposed;
 
 /** Workspace tools need a selected project; they are withheld from the model until one exists. */
 export const PROJECT_SCOPED_REALTIME_TOOLS = [
-  "codex_task",
+  "coding_task",
   "workspace_status",
   "search_workspace",
   "read_file",
@@ -160,12 +161,28 @@ export type RealtimeProjectContext = {
  * it on the data channel is idempotent and guarantees tools + instructions are registered.
  * `model` is omitted: it selects the endpoint at call creation and is not updatable mid-session.
  */
-export function buildSessionUpdate(model: string, voice: string, activeProject: RealtimeProjectContext) {
-  const { model: _model, ...session } = buildSessionConfig(model, voice, activeProject);
+export function buildSessionUpdate(
+  model: string,
+  voice: string,
+  activeProject: RealtimeProjectContext,
+  codingAgentName: CodingAgentName = "cursor"
+) {
+  const { model: _model, ...session } = buildSessionConfig(
+    model,
+    voice,
+    activeProject,
+    codingAgentName
+  );
   return { type: "session.update", session };
 }
 
-export function buildSessionConfig(model: string, voice: string, activeProject: RealtimeProjectContext) {
+export function buildSessionConfig(
+  model: string,
+  voice: string,
+  activeProject: RealtimeProjectContext,
+  codingAgentName: CodingAgentName = "cursor"
+) {
+  const codingAgentDisplayName = codingAgentName === "cursor" ? "Cursor" : "Codex App Server";
   return {
     type: "realtime",
     model,
@@ -188,14 +205,14 @@ export function buildSessionConfig(model: string, voice: string, activeProject: 
       "Your name is Elva.",
       "Treat Elva as your wake name. Only respond or call tools when the user's latest utterance addresses you as Elva. Otherwise produce no spoken response.",
       "Use GPT-Realtime-2 for natural low-latency voice conversation.",
-      "You have fast read-only workspace tools and one delegation tool. Prefer the fast tools when they answer the question directly, and delegate real work to codex_task.",
+      "You have fast workspace tools and one coding delegation tool. Prefer the fast tools when they answer the question directly, and delegate real work to coding_task.",
       "Fast read-only workspace tools: workspace_status for git status and the tracked file list, search_workspace to find text or a symbol with ripgrep, read_file to read one file whose path you already know, git_diff to see uncommitted changes. Chain a couple of them when that answers the question, and report what they actually returned.",
-      "For code implementation, file changes, multi-step investigation, refactoring, debugging that needs reasoning across many files, and any command other than the configured test command, call codex_task so Codex App Server does the work.",
+      `For code implementation, file changes, multi-step investigation, refactoring, debugging that needs reasoning across many files, and any command other than the configured test command, call coding_task so the configured ${codingAgentDisplayName} agent does the work.`,
       "run_tests executes the project's configured test command immediately with no approval step. Call it only when the user explicitly asks to run the tests, and say that you are running them.",
-      "propose_patch only stages a unified diff for human review; it never applies the change. Use it only for a small, precise edit the user explicitly described when you already know the exact current file contents, then tell the user to review and apply it in the patch panel. Otherwise use codex_task.",
+      "propose_patch only stages a unified diff for human review; it never applies the change. Use it only for a small, precise edit the user explicitly described when you already know the exact current file contents, then tell the user to review and apply it in the patch panel. Otherwise use coding_task.",
       "All workspace tools require a selected project and accept workspace-relative paths only. If a tool reports that no project is selected, that a path escapes the project, or that a file is too large, say what it reported instead of guessing.",
-      "For current events, recent facts, external documentation, prices, schedules, and other public internet information, call web_search through Firecrawl. Do not send web searches through codex_task.",
-      "Do not claim a tool succeeded before it returns, and do not claim Codex completed a coding task until codex_task returns.",
+      "For current events, recent facts, external documentation, prices, schedules, and other public internet information, call web_search through Firecrawl. Do not send web searches through coding_task.",
+      `The configured coding provider is ${codingAgentName}. Do not ask the user to choose a provider. Do not claim a tool succeeded before it returns, and do not claim ${codingAgentDisplayName} completed a coding task until coding_task returns.`,
       formatProjectInstruction(activeProject),
       "When no project is selected, explain that coding work requires selecting or creating a project, but normal voice chat can continue.",
       "Keep spoken responses concise. Summarize tool results in short practical language. Do not read long file contents, diffs, or search output aloud verbatim; summarize and offer detail on request. Mention source names for web searches, but do not read raw URLs aloud unless asked.",
@@ -222,7 +239,7 @@ function formatProjectInstruction(activeProject: RealtimeProjectContext) {
     "Current application project state: a project is selected.",
     `Selected project name: ${activeProject.name}.`,
     `Selected project path: ${activeProject.path}.`,
-    "For repository-specific requests, assume this selected project is available and use the workspace tools or codex_task. Do not say no project is selected.",
+    "For repository-specific requests, assume this selected project is available and use the workspace tools or coding_task. Do not say no project is selected.",
     "Pass every tool path relative to the selected project path, not as an absolute path."
   ].join(" ");
 }

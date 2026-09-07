@@ -46,7 +46,7 @@ export type ProjectCandidate = {
 
 export type ConnectionStatus = "idle" | "connecting" | "connected" | "disconnected" | "error";
 
-export type CodexHeaderState = "running" | "done" | "error" | "interrupted";
+export type CodingTaskHeaderState = "running" | "done" | "error" | "interrupted";
 
 export type ToastLevel = "info" | "error";
 

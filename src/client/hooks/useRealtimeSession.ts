@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatApiError } from "../lib/api";
 import { buildVoiceStyleGraph, ensureAudioContext } from "../lib/audio";
-import { isExplicitCodexInterruptionRequest } from "../lib/intent";
+import { isExplicitCodingInterruptionRequest } from "../lib/intent";
 import type { ConnectionStatus, RealtimeEvent, VoiceStyleId } from "../types";
-import type { PendingPatch } from "../../shared/contracts";
+import type { CodingAgentName, PendingPatch } from "../../shared/contracts";
 import { useCodexToolExecution } from "./useCodexToolExecution";
 
 type Logger = (message: string) => void;
 
 type Options = {
   voiceStyle: VoiceStyleId;
+  codingAgentRef: { current: CodingAgentName | null };
   addLog: (role: "system" | "user" | "assistant" | "tool", text: string) => string;
   updateLog: (id: string, text: string) => void;
   onSystemLog: Logger;
@@ -22,6 +23,7 @@ type Options = {
 
 export function useRealtimeSession({
   voiceStyle,
+  codingAgentRef,
   addLog,
   updateLog,
   onSystemLog,
@@ -49,6 +51,7 @@ export function useRealtimeSession({
     addLog,
     updateLog,
     onPendingPatch,
+    codingAgentRef,
     dataChannelRef: dcRef,
     conversationRevisionRef
   });
@@ -196,12 +199,12 @@ export function useRealtimeSession({
       if (event.type === "conversation.item.input_audio_transcription.completed" && event.transcript) {
         const transcript = event.transcript.trim();
         addLog("user", transcript);
-        if (isExplicitCodexInterruptionRequest(transcript)) {
+        if (isExplicitCodingInterruptionRequest(transcript)) {
           const interrupted = abortCodexTasks(
-            "Codex App Server task was interrupted by an explicit user request."
+            "Coding agent task was interrupted by an explicit user request."
           );
           if (interrupted) {
-            addLog("system", "Codex App Server task interrupted by user request.");
+            addLog("system", "Coding agent task interrupted by user request.");
           }
         }
         return;
@@ -234,7 +237,7 @@ export function useRealtimeSession({
     streamRef.current?.getTracks().forEach((track) => track.stop());
     cleanupRemoteAudio();
     onMicStreamEnded();
-    abortCodexTasks("Codex App Server task was interrupted because the realtime session disconnected.");
+    abortCodexTasks("Coding agent task was interrupted because the realtime session disconnected.");
     clearAbortControllers();
     dcRef.current = null;
     pcRef.current = null;
@@ -278,7 +281,7 @@ export function useRealtimeSession({
       onMicStreamReady(stream);
 
       // Re-apply instructions + tools over the data channel: some Realtime endpoints and relays
-      // ignore the `session` part of the SDP exchange, which leaves the model without codex_task.
+      // ignore the `session` part of the SDP exchange, which leaves the model without coding_task.
       let sessionUpdate: unknown = null;
       try {
         const sessionResponse = await fetch("/api/realtime/session");
@@ -317,7 +320,7 @@ export function useRealtimeSession({
         }
         addLog(
           "system",
-          "GPT-Realtime-2 voice session connected. Coding tasks will be delegated to Codex App Server."
+          "GPT-Realtime-2 voice session connected. Coding tasks will be delegated to the configured agent."
         );
       };
       dc.onclose = () => {
@@ -411,14 +414,14 @@ export function useRealtimeSession({
 
       setIsTextSubmitting(true);
       try {
-        const response = await fetch("/api/codex/message", {
+        const response = await fetch("/api/coding-agent/message", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: trimmed })
         });
         const data = (await response.json()) as { text?: string; error?: string };
         if (!response.ok) {
-          throw new Error(data.error ?? "Codex App Server text turn failed.");
+          throw new Error(data.error ?? "Coding agent text turn failed.");
         }
         addLog("assistant", data.text || "(no response)");
       } catch (error) {

@@ -84,6 +84,12 @@ export class CodexProcess {
     this.rejectAllPending(new Error("Codex App Server was restarted."));
   }
 
+  stop() {
+    this.child?.kill();
+    this.child = null;
+    this.rejectAllPending(new Error("Codex App Server was stopped."));
+  }
+
   /** Send a JSON-RPC request and return a promise resolving with the result. */
   request(method: string, params?: Record<string, unknown>, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS) {
     this.ensureSpawned();

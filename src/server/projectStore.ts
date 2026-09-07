@@ -22,7 +22,7 @@ export class ProjectStore {
       const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as ProjectStoreFile;
       this.projects = parsed.projects.map(normalizeProject);
       this.projects = await filterExistingProjects(this.projects);
-      this.activeProjectId = "";
+      this.activeProjectId = parsed.activeProjectId;
     } catch {
       this.projects = [];
       this.activeProjectId = "";

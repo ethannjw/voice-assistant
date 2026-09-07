@@ -1,6 +1,10 @@
 import { SPINNER_FRAMES } from "../constants";
-import type { CodexHeaderState } from "../types";
-import type { CodexApprovalDecision, CodexApprovalRequest } from "../../shared/contracts";
+import type { CodingTaskHeaderState } from "../types";
+import type {
+  CodexApprovalDecision,
+  CodexApprovalRequest,
+  CodingAgentName
+} from "../../shared/contracts";
 
 export function formatElapsed(totalSeconds: number) {
   if (totalSeconds < 60) {
@@ -11,7 +15,13 @@ export function formatElapsed(totalSeconds: number) {
   return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
 }
 
-export function formatCodexHeader(task: string, elapsedMs: number, state: CodexHeaderState) {
+export function formatCodingTaskHeader(
+  codingAgent: CodingAgentName | null,
+  task: string,
+  elapsedMs: number,
+  state: CodingTaskHeaderState
+) {
+  const codingAgentName = formatCodingAgentName(codingAgent);
   const trimmed = task.length > 96 ? `${task.slice(0, 93)}...` : task;
   const taskPart = trimmed ? ` — ${trimmed}` : "";
   const seconds = Math.floor(elapsedMs / 1000);
@@ -19,18 +29,24 @@ export function formatCodexHeader(task: string, elapsedMs: number, state: CodexH
 
   if (state === "running") {
     const spinner = SPINNER_FRAMES[Math.floor(elapsedMs / 100) % SPINNER_FRAMES.length];
-    return `${spinner} codex_task · running ${elapsed}${taskPart}`;
+    return `${spinner} ${codingAgentName} · coding_task · running ${elapsed}${taskPart}`;
   }
 
   if (state === "done") {
-    return `✓ codex_task · finished in ${elapsed}${taskPart}`;
+    return `✓ ${codingAgentName} · coding_task · finished in ${elapsed}${taskPart}`;
   }
 
   if (state === "interrupted") {
-    return `⏸ codex_task · interrupted at ${elapsed}${taskPart}`;
+    return `⏸ ${codingAgentName} · coding_task · interrupted at ${elapsed}${taskPart}`;
   }
 
-  return `✗ codex_task · failed after ${elapsed}${taskPart}`;
+  return `✗ ${codingAgentName} · coding_task · failed after ${elapsed}${taskPart}`;
+}
+
+export function formatCodingAgentName(codingAgent: CodingAgentName | null) {
+  if (codingAgent === "cursor") return "Cursor";
+  if (codingAgent === "codex") return "Codex";
+  return "Loading";
 }
 
 export function metaShortcutLabel(key: string) {
@@ -40,6 +56,10 @@ export function metaShortcutLabel(key: string) {
 }
 
 export function formatApprovalKind(kind: CodexApprovalRequest["kind"]) {
+  if (kind === "cursor_tool") {
+    return "Cursor tool";
+  }
+
   if (kind === "legacy_command") {
     return "command legacy";
   }

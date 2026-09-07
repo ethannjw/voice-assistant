@@ -15,7 +15,7 @@ type RealtimeSessionUpdate = {
 
 /** Every workspace tool plus the two delegation tools, in registration order. */
 const EXPECTED_REALTIME_TOOL_NAMES = [
-  "codex_task",
+  "coding_task",
   "workspace_status",
   "search_workspace",
   "read_file",
@@ -36,6 +36,7 @@ test("connects and requests the one-time Elva greeting after session registratio
   });
 
   await page.goto("/");
+  await expect(page.getByLabel("Coding harness: Cursor")).toBeVisible();
   await page.getByRole("button", { name: "Connect" }).click();
   await expect(page.locator(".status-pill")).toHaveText("Connected");
 
@@ -68,6 +69,63 @@ test("connects and requests the one-time Elva greeting after session registratio
 
   await page.getByRole("button", { name: "Disconnect" }).click();
   await expect(page.locator(".status-pill")).toHaveText("Disconnected");
+});
+
+test("shows coding_task progress for realtime delegation", async ({ page }) => {
+  await installRealtimeBrowserFakes(page);
+  await page.route("**/api/realtime/call", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/sdp", body: "e2e-answer" });
+  });
+
+  let releaseToolResponse!: () => void;
+  const toolResponseGate = new Promise<void>((resolve) => {
+    releaseToolResponse = resolve;
+  });
+  await page.route("**/api/tools/coding_task", async (route) => {
+    await toolResponseGate;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, output: "Cursor completed the task." })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Connect" }).click();
+  await expect(page.locator(".status-pill")).toHaveText("Connected");
+  await page.evaluate(() => {
+    const channel = (
+      window as unknown as {
+        __e2eRealtimeDataChannel: { onmessage: ((event: MessageEvent) => void) | null };
+      }
+    ).__e2eRealtimeDataChannel;
+    channel.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          type: "response.done",
+          response: {
+            status: "completed",
+            output: [
+              {
+                type: "function_call",
+                name: "coding_task",
+                call_id: "coding-call-e2e",
+                arguments: JSON.stringify({ task: "update the selected project" })
+              }
+            ]
+          }
+        })
+      })
+    );
+  });
+
+  await expect(page.locator("article.message.tool").first()).toContainText(
+    "Cursor · coding_task · running"
+  );
+  releaseToolResponse();
+  await expect(page.locator("article.message.tool").first()).toContainText(
+    "Cursor · coding_task · finished"
+  );
 });
 
 test.describe("realtime tool registry", () => {
@@ -124,7 +182,7 @@ test.describe("realtime tool registry", () => {
     }
   });
 
-  test("instructs Elva to prefer fast tools and delegate real work to codex_task", async ({
+  test("instructs Elva to prefer fast tools and delegate real work to coding_task", async ({
     request
   }) => {
     await selectE2eWorkspace(request);
@@ -135,7 +193,7 @@ test.describe("realtime tool registry", () => {
     expect(session.instructions).toContain(
       "For code implementation, file changes, multi-step investigation"
     );
-    expect(session.instructions).toContain("call codex_task so Codex App Server does the work");
+    expect(session.instructions).toContain("call coding_task so the configured Cursor agent does the work");
     expect(session.instructions).toContain("Call it only when the user explicitly asks to run the tests");
     expect(session.instructions).toContain("propose_patch only stages a unified diff");
     expect(session.instructions).toContain(

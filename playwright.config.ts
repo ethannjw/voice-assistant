@@ -3,6 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 import {
   e2eRoot,
   fakeCodexBinDirectory,
+  fakeCursorAgentPath,
   repositoryRoot,
   toolTestCommandPath
 } from "./e2e/support/paths";
@@ -57,6 +58,9 @@ export default defineConfig({
         WORKSPACE_ROOT: path.join(e2eRoot, "unused-default"),
         NO_PROJECT_WORKSPACE: path.join(e2eRoot, "no-project"),
         FIRECRAWL_BASE_URL: firecrawlBaseUrl,
+        CODING_AGENT: "cursor",
+        CURSOR_MODEL: "cursor-e2e-model",
+        CURSOR_AGENT_COMMAND: fakeCursorAgentPath,
         TEST_COMMAND: `node ${toolTestCommandPath}`,
         PATH: [fakeCodexBinDirectory, inheritedEnv.PATH].filter(Boolean).join(path.delimiter)
       },
