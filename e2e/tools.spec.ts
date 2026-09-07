@@ -32,9 +32,9 @@ test.describe.serial("registered tools", () => {
   });
 
   test("has explicit E2E coverage for every registered tool", () => {
+    // Every workspace tool is now also a realtime tool, so the two lists overlap. Dedupe.
     const registeredToolNames = [
-      ...WORKSPACE_TOOL_NAMES,
-      ...REALTIME_TOOLS.map((tool) => tool.name)
+      ...new Set<string>([...WORKSPACE_TOOL_NAMES, ...REALTIME_TOOLS.map((tool) => tool.name)])
     ].sort();
     expect([...COVERED_TOOL_NAMES].sort()).toEqual(registeredToolNames);
   });
