@@ -1,10 +1,13 @@
-export type ToolName =
-  | "workspace_status"
-  | "search_workspace"
-  | "read_file"
-  | "git_diff"
-  | "run_tests"
-  | "propose_patch";
+export const WORKSPACE_TOOL_NAMES = [
+  "workspace_status",
+  "search_workspace",
+  "read_file",
+  "git_diff",
+  "run_tests",
+  "propose_patch"
+] as const;
+
+export type ToolName = (typeof WORKSPACE_TOOL_NAMES)[number];
 
 export type ToolRequest = {
   name: ToolName;

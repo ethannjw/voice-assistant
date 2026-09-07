@@ -333,6 +333,32 @@ The quickest setup is to copy `.env.example` and then edit it.
 
 ---
 
+## End-to-End Testing
+
+The Playwright suite launches the real Express/Vite application and a real Chromium browser. It remains deterministic by using a disposable Git repository under `.e2e/`, a fake Codex app-server executable, a local Firecrawl stub, and browser-level microphone and WebRTC fakes. The default suite does not call live OpenAI, Codex, or Firecrawl services.
+
+Install the pinned Chromium build once, then run the suite:
+
+```bash
+npm run test:e2e:install
+npm run test:e2e
+```
+
+Additional commands:
+
+| Command | Purpose |
+| --- | --- |
+| `npm run test:e2e:headed` | Run with a visible Chromium window |
+| `npm run test:e2e:ui` | Open Playwright's interactive UI |
+| `npm run test:e2e:debug` | Start Playwright Inspector |
+| `npm run test:e2e:typecheck` | Type-check the Playwright configuration and tests |
+
+The suite covers application loading, disconnected text turns, microphone errors, the Realtime connection and one-time Elva greeting, and every registered tool: `workspace_status`, `search_workspace`, `read_file`, `git_diff`, `run_tests`, `propose_patch`, `codex_task`, and `web_search`.
+
+Traces, screenshots, and videos are retained under `test-results/` when a test fails. The HTML report is written to `playwright-report/`. These directories and the disposable `.e2e/` workspace are ignored by Git.
+
+---
+
 ## Troubleshooting
 
 ### `OPENAI_API_KEY is required` After Clicking `CONNECT`
