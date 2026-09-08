@@ -3,7 +3,7 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer as createViteServer } from "vite";
-import { CodexAppServer } from "./codex";
+import { createCodingAgent } from "./codingAgent";
 import { env } from "./env";
 import { ProjectStore } from "./projectStore";
 import { mountRoutes } from "./routes";
@@ -19,9 +19,12 @@ const app = express();
 const projectStore = new ProjectStore(env.projectStorePath, env.defaultWorkspaceRoot);
 await projectStore.load();
 const tools = new WorkspaceTools(projectStore.getActiveProject()?.path ?? null);
-const codexAppServer = new CodexAppServer({
-  model: env.codexModel,
-  modelProvider: env.codexModelProvider,
+const codingAgent = createCodingAgent({
+  provider: env.codingAgent,
+  cursorCommand: env.cursorAgentCommand,
+  cursorModel: env.cursorModel,
+  codexModel: env.codexModel,
+  codexModelProvider: env.codexModelProvider,
   noProjectWorkspace: env.noProjectWorkspace
 });
 
@@ -36,7 +39,9 @@ app.use(express.json({ limit: "1mb" }));
 mountRoutes(app, {
   projectStore,
   tools,
-  codexAppServer,
+  codingAgent,
+  codingAgentName: env.codingAgent,
+  codingModel: env.codingAgent === "cursor" ? env.cursorModel : env.codexModel,
   realtimeModel: env.realtimeModel,
   firecrawlBaseUrl: env.firecrawlBaseUrl,
   voice: env.voice
@@ -66,7 +71,13 @@ app.listen(env.port, () => {
   console.log(`Realtime model: ${env.realtimeModel}`);
   console.log(`Realtime voice: ${env.voice}`);
   console.log(`Firecrawl URL: ${env.firecrawlBaseUrl}`);
-  console.log(`Codex model provider: ${env.codexModelProvider ?? "(default from config.toml)"}`);
-  console.log(`Codex model: ${env.codexModel ?? "(from config.toml)"}`);
-  console.log("Codex App Server: enabled");
+  console.log(`Coding agent: ${env.codingAgent}`);
+  console.log(
+    `Coding model: ${env.codingAgent === "cursor" ? env.cursorModel ?? "(Cursor default)" : env.codexModel ?? "(Codex default)"}`
+  );
+  if (env.codingAgent === "cursor") {
+    console.log(`Cursor Agent command: ${env.cursorAgentCommand} acp`);
+  } else {
+    console.log(`Codex model provider: ${env.codexModelProvider ?? "(default from config.toml)"}`);
+  }
 });

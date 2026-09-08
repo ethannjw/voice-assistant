@@ -9,7 +9,7 @@ export const STATUS_LABELS: Record<ConnectionStatus, string> = {
 };
 
 export const VOICE_STYLES: VoiceStyle[] = [
-  { id: "natural", name: "Natural", detail: "Clean Codex voice" },
+  { id: "natural", name: "Natural", detail: "Clean coding voice" },
   { id: "console_ai", name: "Console AI", detail: "Tight radio band" },
   { id: "starship", name: "Starship", detail: "Wide command deck" },
   { id: "synthetic", name: "Synthetic", detail: "Crisp machine tone" },
@@ -22,6 +22,6 @@ export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", 
 
 export const APPROVAL_POLL_INTERVAL_MS = 1500;
 
-export const CODEX_TASK_HEARTBEAT_MS = 120;
+export const CODING_TASK_HEARTBEAT_MS = 120;
 
 export const SCROLL_BOTTOM_THRESHOLD_PX = 80;

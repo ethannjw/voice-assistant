@@ -1,5 +1,6 @@
 import type { Express } from "express";
-import type { CodexAppServer } from "../codex";
+import type { CodingAgent } from "../codingAgent";
+import type { CodingAgentName } from "../../shared/contracts";
 import type { ProjectStore } from "../projectStore";
 import type { WorkspaceTools } from "../tools";
 import { mountConfigRoutes } from "./config";
@@ -12,7 +13,9 @@ import { mountPatchRoutes } from "./patch";
 export type RouteDeps = {
   projectStore: ProjectStore;
   tools: WorkspaceTools;
-  codexAppServer: CodexAppServer;
+  codingAgent: CodingAgent;
+  codingAgentName: CodingAgentName;
+  codingModel?: string;
   realtimeModel: string;
   firecrawlBaseUrl: string;
   voice: string;

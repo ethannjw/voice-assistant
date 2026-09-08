@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { ToolName } from "../shared/contracts";
+import type { CodingAgentName } from "../shared/contracts";
 
 const ELVA_PROMPT = readFileSync(
   fileURLToPath(new URL("./prompts/elva.md", import.meta.url)),
@@ -10,15 +11,15 @@ const ELVA_PROMPT = readFileSync(
 export const REALTIME_TOOLS = [
   {
     type: "function",
-    name: "codex_task",
+    name: "coding_task",
     description:
-      "Delegate repository investigation, command execution, implementation, or file-change work to Codex App Server. Use this for coding tasks instead of trying to solve them only in the realtime voice model.",
+      "Delegate repository investigation, command execution, implementation, or file-change work to the configured coding agent. Use this for coding tasks instead of trying to solve them only in the realtime voice model.",
     parameters: {
       type: "object",
       properties: {
         task: {
           type: "string",
-          description: "The concrete coding or repository task Codex should perform."
+          description: "The concrete coding or repository task the configured coding agent should perform."
         }
       },
       required: ["task"],
@@ -100,7 +101,7 @@ export const REALTIME_TOOLS = [
     type: "function",
     name: "propose_patch",
     description:
-      "Stage a unified diff for human review in the patch panel. It is never applied automatically; the user must press APPLY. Use it only for a small, precise change the user explicitly described, and only when you already know the exact current file contents. For anything larger, multi-file, or requiring investigation, use codex_task instead.",
+      "Stage a unified diff for human review in the patch panel. It is never applied automatically; the user must press APPLY. Use it only for a small, precise change the user explicitly described, and only when you already know the exact current file contents. For anything larger, multi-file, or requiring investigation, use coding_task instead.",
     parameters: {
       type: "object",
       properties: {
@@ -145,7 +146,7 @@ void _everyWorkspaceToolIsExposed;
 
 /** Workspace tools need a selected project; they are withheld from the model until one exists. */
 export const PROJECT_SCOPED_REALTIME_TOOLS = [
-  "codex_task",
+  "coding_task",
   "workspace_status",
   "search_workspace",
   "read_file",
@@ -167,12 +168,27 @@ export type RealtimeProjectContext = {
  * it on the data channel is idempotent and guarantees tools + instructions are registered.
  * `model` is omitted: it selects the endpoint at call creation and is not updatable mid-session.
  */
-export function buildSessionUpdate(model: string, voice: string, activeProject: RealtimeProjectContext) {
-  const { model: _model, ...session } = buildSessionConfig(model, voice, activeProject);
+export function buildSessionUpdate(
+  model: string,
+  voice: string,
+  activeProject: RealtimeProjectContext,
+  codingAgentName: CodingAgentName = "cursor"
+) {
+  const { model: _model, ...session } = buildSessionConfig(
+    model,
+    voice,
+    activeProject,
+    codingAgentName
+  );
   return { type: "session.update", session };
 }
 
-export function buildSessionConfig(model: string, voice: string, activeProject: RealtimeProjectContext) {
+export function buildSessionConfig(
+  model: string,
+  voice: string,
+  activeProject: RealtimeProjectContext,
+  codingAgentName: CodingAgentName = "cursor"
+) {
   return {
     type: "realtime",
     model,
@@ -190,10 +206,23 @@ export function buildSessionConfig(model: string, voice: string, activeProject: 
         voice
       }
     },
-    instructions: [ELVA_PROMPT, formatProjectInstruction(activeProject)].join("\n\n"),
+    instructions: [
+      ELVA_PROMPT,
+      formatCodingAgentInstruction(codingAgentName),
+      formatProjectInstruction(activeProject)
+    ].join("\n\n"),
     tools: REALTIME_TOOLS,
     tool_choice: "auto"
   };
+}
+
+function formatCodingAgentInstruction(codingAgentName: CodingAgentName) {
+  const displayName = codingAgentName === "cursor" ? "Cursor" : "Codex App Server";
+  return [
+    `Current coding provider: ${codingAgentName}.`,
+    `coding_task delegates work to ${displayName}. Do not ask the user to choose a provider.`,
+    `Do not claim a tool succeeded before it returns, and do not claim ${displayName} completed a coding task until coding_task returns.`
+  ].join(" ");
 }
 
 function formatProjectInstruction(activeProject: RealtimeProjectContext) {
@@ -210,7 +239,7 @@ function formatProjectInstruction(activeProject: RealtimeProjectContext) {
     "Current application project state: a project is selected.",
     `Selected project name: ${activeProject.name}.`,
     `Selected project path: ${activeProject.path}.`,
-    "For repository-specific requests, assume this selected project is available and use the workspace tools or codex_task. Do not say no project is selected.",
+    "For repository-specific requests, assume this selected project is available and use the workspace tools or coding_task. Do not say no project is selected.",
     "Pass every tool path relative to the selected project path, not as an absolute path."
   ].join(" ");
 }

@@ -11,13 +11,14 @@ const COVERED_TOOL_NAMES = [
   "git_diff",
   "run_tests",
   "propose_patch",
+  "coding_task",
   "codex_task",
   "web_search"
 ] as const;
 
 async function callTool(
   request: APIRequestContext,
-  name: ToolName | "codex_task" | "web_search",
+  name: ToolName | "coding_task" | "codex_task" | "web_search",
   data: Record<string, unknown> = {}
 ) {
   const response = await request.post(`/api/tools/${name}`, { data });
@@ -33,10 +34,14 @@ test.describe.serial("registered tools", () => {
 
   test("has explicit E2E coverage for every registered tool", () => {
     // Every workspace tool is now also a realtime tool, so the two lists overlap. Dedupe.
-    const registeredToolNames = [
-      ...new Set<string>([...WORKSPACE_TOOL_NAMES, ...REALTIME_TOOLS.map((tool) => tool.name)])
+    const requiredCoverageNames = [
+      ...new Set<string>([
+        ...WORKSPACE_TOOL_NAMES,
+        ...REALTIME_TOOLS.map((tool) => tool.name),
+        "codex_task"
+      ])
     ].sort();
-    expect([...COVERED_TOOL_NAMES].sort()).toEqual(registeredToolNames);
+    expect([...COVERED_TOOL_NAMES].sort()).toEqual(requiredCoverageNames);
   });
 
   test("workspace_status reports the selected disposable repository", async ({ request }) => {
@@ -90,15 +95,21 @@ test.describe.serial("registered tools", () => {
     expect(discardResponse.status()).toBe(204);
   });
 
-  test("codex_task completes through the fake app-server process", async ({ request }) => {
-    const result = await callTool(request, "codex_task", { task: "inspect the E2E workspace" });
+  test("coding_task completes through the configured Cursor ACP process", async ({ request }) => {
+    const result = await callTool(request, "coding_task", { task: "inspect the E2E workspace" });
     expect(result.ok).toBe(true);
-    expect(result.output).toContain("Fake Codex completed: inspect the E2E workspace");
+    expect(result.output).toContain("Fake Cursor (cursor-e2e-model");
     expect(result.metadata).toMatchObject({
-      threadId: "e2e-thread",
-      turnId: "e2e-turn",
-      status: "completed"
+      provider: "cursor",
+      status: "end_turn"
     });
+  });
+
+  test("codex_task remains a compatibility alias for the configured agent", async ({ request }) => {
+    const result = await callTool(request, "codex_task", { task: "legacy task alias" });
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain("Fake Cursor (cursor-e2e-model");
+    expect(result.metadata).toMatchObject({ provider: "cursor" });
   });
 
   test("web_search completes through the Firecrawl stub", async ({ request }) => {

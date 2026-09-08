@@ -6,28 +6,29 @@ import type { RouteDeps } from "./index";
 
 export function mountToolRoutes(
   app: Express,
-  { tools, codexAppServer, projectStore, firecrawlBaseUrl }: RouteDeps
+  { tools, codingAgent, projectStore, firecrawlBaseUrl }: RouteDeps
 ) {
   app.post("/api/tools/:name", async (req, res) => {
-    if (req.params.name === "codex_task") {
+    if (req.params.name === "coding_task" || req.params.name === "codex_task") {
       const task = typeof req.body?.task === "string" ? req.body.task.trim() : "";
       if (!task) {
-        res.status(400).json({ ok: false, output: "codex_task requires a task string." });
+        res.status(400).json({ ok: false, output: `${req.params.name} requires a task string.` });
         return;
       }
 
       const activeProject = projectStore.getActiveProject();
       const abortController = createRequestAbortController(req, res);
       try {
-        const result = await codexAppServer.runTextTurn(
+        const result = await codingAgent.runTextTurn(
           activeProject?.path ?? null,
           task,
           abortController.signal
         );
         res.json({
           ok: true,
-          output: formatCodexTaskOutput(activeProject, result.text),
+          output: formatCodingTaskOutput(activeProject, result.text, codingAgent.name),
           metadata: {
+            provider: codingAgent.name,
             project: activeProject
               ? { id: activeProject.id, name: activeProject.name, path: activeProject.path }
               : null,
@@ -73,11 +74,16 @@ export function mountToolRoutes(
   });
 }
 
-function formatCodexTaskOutput(project: ProjectConfig | null, text: string) {
+function formatCodingTaskOutput(
+  project: ProjectConfig | null,
+  text: string,
+  provider: "cursor" | "codex"
+) {
   const projectLine = project
     ? `Selected project: ${project.name} (${project.path})`
     : "Selected project: none";
-  const body = text.trim() || "Codex completed without a text summary.";
+  const displayName = provider === "cursor" ? "Cursor" : "Codex";
+  const body = text.trim() || `${displayName} completed without a text summary.`;
   return `${projectLine}\n\n${body}`;
 }
 

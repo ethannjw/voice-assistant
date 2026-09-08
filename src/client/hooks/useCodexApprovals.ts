@@ -16,7 +16,7 @@ export function useCodexApprovals({ onSystemLog }: Options) {
 
   const fetchApprovals = useCallback(async () => {
     try {
-      const response = await fetch("/api/codex/approvals");
+      const response = await fetch("/api/coding-agent/approvals");
       const data = (await response.json()) as { approvals?: CodexApprovalRequest[] };
       if (response.ok) {
         setApprovals(data.approvals ?? []);
@@ -45,11 +45,14 @@ export function useCodexApprovals({ onSystemLog }: Options) {
     async (approval: CodexApprovalRequest, decision: CodexApprovalDecision) => {
       setIsResolvingId(approval.id);
       try {
-        const response = await fetch(`/api/codex/approvals/${encodeURIComponent(approval.id)}`, {
+        const response = await fetch(
+          `/api/coding-agent/approvals/${encodeURIComponent(approval.id)}`,
+          {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ decision })
-        });
+          }
+        );
         const data = (await response.json().catch(() => ({}))) as { error?: string };
 
         if (!response.ok) {

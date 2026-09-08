@@ -518,6 +518,40 @@ h2 {
    Status pill
    ========================================================================== */
 
+.topbar-statuses {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.agent-pill {
+  border: 1px solid var(--line-hot);
+  border-radius: 999px;
+  padding: 7px 12px;
+  color: var(--ink-dim);
+  background: var(--bg-recess);
+  font-family: var(--display);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  white-space: nowrap;
+}
+
+.agent-pill.cursor {
+  border-color: var(--cyan);
+  color: var(--cyan);
+  text-shadow: 0 0 8px var(--cyan-glow);
+}
+
+.agent-pill.codex {
+  border-color: var(--magenta);
+  color: var(--magenta);
+  text-shadow: 0 0 8px var(--magenta-glow);
+}
+
 .status-pill {
   position: relative;
   border: 1px solid var(--line-hot);
@@ -1844,6 +1878,10 @@ h2 {
   .topbar,
   .patch-panel header {
     flex-direction: column;
+  }
+
+  .topbar-statuses {
+    justify-content: flex-start;
   }
 
   .controls button {

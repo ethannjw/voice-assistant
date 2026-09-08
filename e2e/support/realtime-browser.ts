@@ -112,6 +112,10 @@ export async function installRealtimeBrowserFakes(
 
       createDataChannel() {
         this.dataChannel = new FakeDataChannel();
+        Object.defineProperty(window, "__e2eRealtimeDataChannel", {
+          configurable: true,
+          value: this.dataChannel
+        });
         window.setTimeout(() => this.dataChannel?.open(), 0);
         return this.dataChannel;
       }

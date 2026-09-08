@@ -40,7 +40,7 @@ export function ApprovalPanel({
       <header>
         <div>
           <p className="eyebrow">Human approval required</p>
-          <h2>{activeApproval ? "Codex approval" : pendingPatch ? "Legacy patch" : "Approval queue"}</h2>
+          <h2>{activeApproval ? "Coding approval" : pendingPatch ? "Legacy patch" : "Approval queue"}</h2>
         </div>
         {activeApproval ? (
           <span className="patch-id">
@@ -218,9 +218,9 @@ function ApprovalEmptyState({
       <p className="empty-state-subtitle">
         {isConnected
           ? hasProject
-            ? "Codex will surface command and file-change requests here. Approve / Session / Decline to control execution."
-            : "Select a project to let Codex inspect or modify a repository."
-          : "Connect a session to begin. Codex requests will appear here once a coding task starts."}
+            ? "The coding agent will surface command and file-change requests here. Approve / Session / Decline to control execution."
+            : "Select a project to let the coding agent inspect or modify a repository."
+          : "Connect a session to begin. Coding requests will appear here once a task starts."}
       </p>
     </div>
   );

@@ -1,8 +1,11 @@
 import path from "node:path";
+import { parseCodingAgentName } from "./codingAgent";
 
 // Codex `model_provider` from ~/.codex/config.toml, passed as `codex app-server -c model_provider=<name>`.
 // `--profile` cannot be used: codex-cli restricts it to runtime commands and rejects it for app-server.
 const codexModelProvider = process.env.CODEX_MODEL_PROVIDER?.trim() || undefined;
+const codingAgent = parseCodingAgentName(process.env.CODING_AGENT);
+const cursorModel = process.env.CURSOR_MODEL?.trim() || undefined;
 
 if (process.env.CODEX_PROFILE?.trim()) {
   console.warn(
@@ -19,6 +22,9 @@ export const env = {
   ),
   realtimeModel: process.env.OPENAI_REALTIME_MODEL ?? "gpt-realtime-2",
   firecrawlBaseUrl: process.env.FIRECRAWL_BASE_URL?.trim() || "http://localhost:3002",
+  codingAgent,
+  cursorAgentCommand: process.env.CURSOR_AGENT_COMMAND?.trim() || "agent",
+  cursorModel,
   codexModelProvider,
   // gpt-5.5 is rejected by codex app-server's thread/start as of CLI 0.130; use 5.4.
   // With a custom model_provider, set CODEX_MODEL to a model that provider serves.

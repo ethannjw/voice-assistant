@@ -20,6 +20,8 @@ export type ToolResult = {
   metadata?: Record<string, unknown>;
 };
 
+export type CodingAgentName = "cursor" | "codex";
+
 export type PendingPatch = {
   id: string;
   diff: string;
@@ -30,7 +32,7 @@ export type CodexApprovalDecision = "accept" | "acceptForSession" | "decline";
 
 export type CodexApprovalRequest = {
   id: string;
-  kind: "command" | "file_change" | "legacy_command" | "legacy_file_change";
+  kind: "command" | "file_change" | "legacy_command" | "legacy_file_change" | "cursor_tool";
   title: string;
   reason: string | null;
   command: string | null;
@@ -53,4 +55,6 @@ export type AppConfig = {
   projects: ProjectConfig[];
   realtimeModel: string;
   voice: string;
+  codingAgent: CodingAgentName;
+  codingModel: string | null;
 };

@@ -1,8 +1,8 @@
 import { useCallback, useRef } from "react";
-import { CODEX_TASK_HEARTBEAT_MS } from "../constants";
-import { formatCodexHeader } from "../lib/format";
-import type { CodexHeaderState, LogRole } from "../types";
-import type { PendingPatch, ToolResult } from "../../shared/contracts";
+import { CODING_TASK_HEARTBEAT_MS } from "../constants";
+import { formatCodingTaskHeader } from "../lib/format";
+import type { CodingTaskHeaderState, LogRole } from "../types";
+import type { CodingAgentName, PendingPatch, ToolResult } from "../../shared/contracts";
 
 type RefCell<T> = {
   current: T;
@@ -12,6 +12,7 @@ type Options = {
   addLog: (role: LogRole, text: string) => string;
   updateLog: (id: string, text: string) => void;
   onPendingPatch: (patch: PendingPatch) => void;
+  codingAgentRef: RefCell<CodingAgentName | null>;
   dataChannelRef: RefCell<RTCDataChannel | null>;
   conversationRevisionRef: RefCell<number>;
 };
@@ -28,6 +29,7 @@ export function useCodexToolExecution({
   addLog,
   updateLog,
   onPendingPatch,
+  codingAgentRef,
   dataChannelRef,
   conversationRevisionRef
 }: Options) {
@@ -54,19 +56,30 @@ export function useCodexToolExecution({
   const executeToolCall = useCallback(
     async (name: string, callId: string | null, rawArgs: string) => {
       const args = parseToolArguments(rawArgs);
-      const isCodexTask = name === "codex_task";
-      const taskSummary = isCodexTask && typeof args.task === "string" ? args.task.trim() : "";
+      const isCodingTask = name === "coding_task" || name === "codex_task";
+      const taskSummary = isCodingTask && typeof args.task === "string" ? args.task.trim() : "";
       const startedAt = Date.now();
 
-      const headerLogId = isCodexTask
-        ? addLog("tool", formatCodexHeader(taskSummary, 0, "running"))
+      const headerLogId = isCodingTask
+        ? addLog(
+            "tool",
+            formatCodingTaskHeader(codingAgentRef.current, taskSummary, 0, "running")
+          )
         : addLog("tool", `${name}(${rawArgs})`);
 
       let heartbeat: number | null = null;
-      if (isCodexTask) {
+      if (isCodingTask) {
         heartbeat = window.setInterval(() => {
-          updateLog(headerLogId, formatCodexHeader(taskSummary, Date.now() - startedAt, "running"));
-        }, CODEX_TASK_HEARTBEAT_MS);
+          updateLog(
+            headerLogId,
+            formatCodingTaskHeader(
+              codingAgentRef.current,
+              taskSummary,
+              Date.now() - startedAt,
+              "running"
+            )
+          );
+        }, CODING_TASK_HEARTBEAT_MS);
       }
 
       const revisionAtStart = conversationRevisionRef.current;
@@ -90,7 +103,7 @@ export function useCodexToolExecution({
           result = {
             ok: false,
             output:
-              toolAbortReasonsRef.current.get(abortController) ?? "Codex App Server task was interrupted."
+              toolAbortReasonsRef.current.get(abortController) ?? "Coding agent task was interrupted."
           };
         } else {
           result = { ok: false, output: error instanceof Error ? error.message : String(error) };
@@ -108,13 +121,21 @@ export function useCodexToolExecution({
       const interrupted =
         abortController?.signal.aborted || conversationRevisionRef.current !== revisionAtStart;
 
-      if (isCodexTask) {
-        const finalState: CodexHeaderState = interrupted
+      if (isCodingTask) {
+        const finalState: CodingTaskHeaderState = interrupted
           ? "interrupted"
           : result.ok
             ? "done"
             : "error";
-        updateLog(headerLogId, formatCodexHeader(taskSummary, Date.now() - startedAt, finalState));
+        updateLog(
+          headerLogId,
+          formatCodingTaskHeader(
+            codingAgentRef.current,
+            taskSummary,
+            Date.now() - startedAt,
+            finalState
+          )
+        );
       }
 
       if (!interrupted && result.metadata?.pendingPatch) {
@@ -153,7 +174,7 @@ export function useCodexToolExecution({
         }
       }
     },
-    [addLog, conversationRevisionRef, dataChannelRef, onPendingPatch, updateLog]
+    [addLog, codingAgentRef, conversationRevisionRef, dataChannelRef, onPendingPatch, updateLog]
   );
 
   return {

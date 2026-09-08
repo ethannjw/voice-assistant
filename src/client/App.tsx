@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApprovalPanel } from "./components/ApprovalPanel";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { Conversation } from "./components/Conversation";
@@ -18,6 +18,7 @@ import { useProjectManager } from "./hooks/useProjectManager";
 import { useRealtimeSession } from "./hooks/useRealtimeSession";
 import { useToasts } from "./hooks/useToasts";
 import { isVoiceStyleId } from "./lib/intent";
+import type { CodingAgentName } from "../shared/contracts";
 import type { VoiceStyleId } from "./types";
 
 export function App() {
@@ -27,6 +28,7 @@ export function App() {
   });
   const [input, setInput] = useState("");
   const [micPermissionError, setMicPermissionError] = useState("");
+  const codingAgentRef = useRef<CodingAgentName | null>(null);
 
   const { toasts, pushToast } = useToasts();
   const { confirmDialog, requestConfirm, closeDialog } = useConfirmDialog();
@@ -49,6 +51,7 @@ export function App() {
 
   const realtime = useRealtimeSession({
     voiceStyle,
+    codingAgentRef,
     addLog,
     updateLog,
     onSystemLog,
@@ -81,6 +84,10 @@ export function App() {
       approvals.clearApprovals();
     }
   });
+
+  useEffect(() => {
+    codingAgentRef.current = projects.config?.codingAgent ?? null;
+  }, [projects.config?.codingAgent]);
 
   useKeyboardShortcuts({
     status: realtime.status,
@@ -121,7 +128,11 @@ export function App() {
   return (
     <main className="app-shell">
       <section className="workspace-panel">
-        <Topbar status={realtime.status} />
+        <Topbar
+          status={realtime.status}
+          codingAgent={projects.config?.codingAgent ?? null}
+          codingModel={projects.config?.codingModel ?? null}
+        />
 
         <ProjectPanel
           config={projects.config}

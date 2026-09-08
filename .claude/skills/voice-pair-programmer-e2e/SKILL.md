@@ -1,6 +1,6 @@
 ---
 name: voice-pair-programmer-e2e
-description: Run, extend, and debug the Voice Pair Programmer Playwright E2E suite when changing browser UI, Realtime connection behavior, project handling, Codex delegation, Firecrawl search, or workspace tools.
+description: Run, extend, and debug the Voice Pair Programmer Playwright E2E suite when changing browser UI, Realtime connection behavior, project handling, coding-agent delegation, Firecrawl search, or workspace tools.
 ---
 
 # Voice Pair Programmer E2E
@@ -18,7 +18,7 @@ Use the repository's deterministic Playwright suite before and after changing us
 | Debug interactively | `npm run test:e2e:debug` |
 | Type-check E2E files | `npm run test:e2e:typecheck` |
 
-The default suite launches the real Express/Vite application and a real Chromium browser. It uses only `.e2e/` as a disposable workspace and replaces external dependencies with a fake Codex app-server executable, a local Firecrawl stub, and browser-level microphone/WebRTC fakes.
+The default suite launches the real Express/Vite application and a real Chromium browser. It uses only `.e2e/` as a disposable workspace and replaces external dependencies with fake Cursor ACP and Codex app-server executables, a local Firecrawl stub, and browser-level microphone/WebRTC fakes.
 
 Do not use live API keys, a real repository, or paid external services for the default E2E run.
 
@@ -38,7 +38,8 @@ The suite must retain coverage for:
 - `git_diff`
 - `run_tests`
 - `propose_patch`
-- `codex_task`
+- `coding_task`
+- `codex_task` compatibility alias
 - `web_search`
 
 ## Failure Artifacts

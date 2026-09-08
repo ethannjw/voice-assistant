@@ -20,6 +20,7 @@
     "test:e2e:ui": "npm run test:e2e:prepare && playwright test --ui"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^1.4.0",
     "@vitejs/plugin-react": "^5.0.0",
     "dotenv": "^16.4.7",
     "express": "^5.1.0",

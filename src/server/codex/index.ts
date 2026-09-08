@@ -36,6 +36,7 @@ type Options = {
  *  - Handle server-initiated approval requests by queueing them
  */
 export class CodexAppServer {
+  readonly name = "codex" as const;
   private readonly process: CodexProcess;
   private initializePromise: Promise<void> | null = null;
   private readonly pendingApprovals = new Map<string, PendingApproval>();
@@ -88,6 +89,10 @@ export class CodexAppServer {
 
     this.writeApprovalResponse(approval, decision);
     return true;
+  }
+
+  async dispose() {
+    this.process.stop();
   }
 
   // ---------- Turn lifecycle ----------

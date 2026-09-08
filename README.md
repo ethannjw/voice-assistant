@@ -1,12 +1,12 @@
 # Voice Pair Programmer
 
-This proof-of-concept prototype uses the **OpenAI Realtime API (`gpt-realtime-2`)** for voice input and output, **self-hosted Firecrawl** for web search, and the **Codex CLI `codex app-server`** for actual coding work such as repository investigation, command execution, and file editing.
+This proof-of-concept prototype uses the **OpenAI Realtime API (`gpt-realtime-2`)** for voice input and output, **self-hosted Firecrawl** for web search, and a configurable coding backend for repository investigation, command execution, and file editing. **Cursor Agent over ACP is the default**, with **Codex CLI app-server** available through an environment variable.
 
-When you speak through the browser microphone, audio is sent directly to the Realtime API over WebRTC and the response is played back. Requests that require Codex are forwarded from the Realtime turn to `codex app-server`, and the resulting operations can be reviewed through the approval UI.
+When you speak through the browser microphone, audio is sent directly to the Realtime API over WebRTC and the response is played back. Coding requests are forwarded through `coding_task` to the configured backend, and permission requests can be reviewed through the approval UI.
 
 You can try voice conversation without selecting a project. To investigate or modify a repository, first select a local Git repository as the active project.
 
-> 🔬 This is an experimental repository, not a production application. Its purpose is to evaluate the interaction model and implementation patterns for **voice pair programming with GPT-Realtime-2 and `codex app-server`**. It does not integrate directly with the Codex App UI or its remote-project features.
+> 🔬 This is an experimental repository, not a production application. Its purpose is to evaluate voice pair programming with GPT-Realtime-2 and local coding-agent CLIs. It does not integrate directly with the Cursor or Codex desktop application UI.
 
 ## Responsibilities
 
@@ -14,7 +14,8 @@ You can try voice conversation without selecting a project. To investigate or mo
 | --- | --- | --- |
 | **OpenAI Realtime API (`gpt-realtime-2`)** | Voice input and output over WebRTC | `OPENAI_API_KEY` in `.env` |
 | **Self-hosted Firecrawl** (Docker Compose, `POST /v2/search`) | External web information through `web_search` | None for the local stack; `FIRECRAWL_API_KEY` when authentication is enabled |
-| **Codex CLI app-server** (`codex app-server --listen stdio://`) | Repository investigation, command execution, and file editing | Codex CLI login |
+| **Cursor Agent CLI** (`agent acp`, default) | Repository investigation, command execution, and file editing over ACP | Cursor Agent login |
+| **Codex CLI app-server** (`codex app-server --listen stdio://`, optional) | Alternative coding backend | Codex CLI login |
 | **Express application** | Connects the services, hosts the approval UI, and manages projects | — |
 
 ---
@@ -30,7 +31,7 @@ You can try voice conversation without selecting a project. To investigate or mo
 7. [Adding and Switching Projects](#adding-and-switching-projects)
 8. [Voice Profiles](#voice-profiles)
 9. [Suggested Prompts](#suggested-prompts)
-10. [Voice Interruption and Codex Tasks](#voice-interruption-and-codex-tasks)
+10. [Voice Interruption and Coding Tasks](#voice-interruption-and-coding-tasks)
 11. [Approval Flow](#approval-flow)
 12. [Environment Variable Reference](#environment-variable-reference)
 13. [End-to-End Testing](#end-to-end-testing)
@@ -43,26 +44,26 @@ You can try voice conversation without selecting a project. To investigate or mo
 ## Features
 
 - **Browser ↔ OpenAI Realtime API** WebRTC voice sessions using `gpt-realtime-2`
-- **Codex CLI app-server** threads, turns, conversation history, and streaming responses
-- **Codex-powered investigation and implementation**: after selecting a project, the Codex agent can read the repository and propose commands or file edits through the approval UI
-- **Fast local workspace tools by voice**: Elva can call `workspace_status`, `search_workspace`, `read_file`, `git_diff`, `run_tests`, and `propose_patch` directly for quick answers, and delegates real coding work to `codex_task`
-- **Web search through self-hosted Firecrawl**: the `web_search` tool answers questions about current or external information without going through Codex
-- **Approval UI**: interactively handle Codex command and file-change requests with `APPROVE`, `SESSION`, or `DECLINE`
-- **Voice interruption**: speaking stops only the currently playing audio; an active Codex task continues unless you explicitly ask to stop it
+- **Cursor Agent ACP by default**, with Codex CLI app-server available through `CODING_AGENT=codex`
+- **Coding-agent investigation and implementation**: after selecting a project, the configured agent can inspect the repository and request permission for commands or file edits through the approval UI
+- **Fast local workspace tools by voice**: Elva can call `workspace_status`, `search_workspace`, `read_file`, `git_diff`, `run_tests`, and `propose_patch` directly for quick answers, and delegates real coding work to `coding_task`
+- **Web search through self-hosted Firecrawl**: the `web_search` tool answers questions about current or external information without going through the coding agent
+- **Approval UI**: interactively handle coding-agent command and file-change requests with `APPROVE`, `SESSION`, or `DECLINE`
+- **Voice interruption**: speaking stops only the currently playing audio; an active coding task continues unless you explicitly ask to stop it
 - **Text-input fallback** for situations where speaking is not practical
 - **Voice profiles**: five browser-side effects, including radio-style and robotic voices
 - **Multiple projects**: register and switch between local Git repositories
 
 ### One-Click UI Shortcuts
 
-Utilities that Express runs directly, independently of the Codex session, appear at the bottom of the screen.
+Utilities that Express runs directly, independently of the coding-agent session, appear at the bottom of the screen.
 
 | Button | Action |
 | --- | --- |
 | `INSPECT` | Runs `git status` and displays the result in the log |
 | `TESTS` | Runs `npm test`, or the command configured in `TEST_COMMAND` |
 
-These shortcuts call server-side local tools such as `workspace_status` and `run_tests` without creating a Codex turn.
+These shortcuts call server-side local tools such as `workspace_status` and `run_tests` without creating a coding-agent turn.
 
 The same local tools are registered with the Realtime model, so you can also ask by voice, for example `"Run the tests"`. Elva then calls `run_tests` directly and it runs immediately, without an approval prompt. See [Realtime Tools](#realtime-tools).
 
@@ -70,11 +71,11 @@ The same local tools are registered with the Realtime model, so you can also ask
 
 ## Realtime Tools
 
-Every tool the application implements is registered with the Realtime session, so Elva can answer directly instead of routing every request through Codex. The registry lives in `REALTIME_TOOLS` in `src/server/realtime.ts` and is sent both in the SDP exchange and again as `session.update` when the data channel opens. Elva's static voice instructions live in `src/server/prompts/elva.md`; the server appends the current project context at runtime.
+Every tool the application implements is registered with the Realtime session, so Elva can answer directly instead of routing every request through the coding agent. The registry lives in `REALTIME_TOOLS` in `src/server/realtime.ts` and is sent both in the SDP exchange and again as `session.update` when the data channel opens. Elva's static voice instructions live in `src/server/prompts/elva.md`; the server appends the configured coding provider and current project context at runtime.
 
 | Tool | What it does | Approval | Needs a project |
 | --- | --- | --- | --- |
-| `codex_task` | Delegates implementation, multi-step investigation, refactoring, and arbitrary commands to `codex app-server` | Codex requests approval per command or file change | Recommended; without one Codex works in a temporary directory |
+| `coding_task` | Delegates implementation, multi-step investigation, refactoring, and arbitrary commands to the configured Cursor or Codex backend | The selected agent requests approval when needed | Recommended; without one the agent works in a temporary directory |
 | `workspace_status` | `git status --short` plus the tracked file list | None, read-only | Yes |
 | `search_workspace` | ripgrep search returning file, line number, and matching line | None, read-only | Yes |
 | `read_file` | Returns one file's contents, workspace-relative path only, large files rejected | None, read-only | Yes |
@@ -83,7 +84,7 @@ Every tool the application implements is registered with the Realtime session, s
 | `propose_patch` | Stages a unified diff in the patch panel | **Staged only.** Nothing is written until you press `APPLY` | Yes |
 | `web_search` | Firecrawl `POST /v2/search` | None, read-only and outbound | No |
 
-The session instructions tell Elva to prefer the fast read-only tools when they answer the question directly, and to hand anything involving edits, multi-file reasoning, or non-test commands to `codex_task`. Model behavior is guidance, not enforcement; the guarantees are the ones in the Approval and Needs a project columns, which the server enforces in `src/server/tools.ts`.
+The session instructions tell Elva to prefer the fast read-only tools when they answer the question directly, and to hand anything involving edits, multi-file reasoning, or non-test commands to `coding_task`. Model behavior is guidance, not enforcement; the guarantees are the ones in the Approval and Needs a project columns, which the server enforces in `src/server/tools.ts`.
 
 Project scoping is enforced server-side: with no project selected, all six workspace tools return `No project is selected.` and do nothing. Paths are resolved inside the selected project only, so absolute paths and `../` traversal are rejected or clamped.
 
@@ -92,7 +93,7 @@ Project scoping is enforced server-side: with no project selected, all six works
 Confirm what the model actually received by looking for this line in the connection log:
 
 ```
-Realtime tools registered: codex_task, workspace_status, search_workspace, read_file, git_diff, run_tests, propose_patch, web_search.
+Realtime tools registered: coding_task, workspace_status, search_workspace, read_file, git_diff, run_tests, propose_patch, web_search.
 ```
 
 ---
@@ -103,11 +104,12 @@ Realtime tools registered: codex_task, workspace_status, search_workspace, read_
 | --- | --- |
 | **Node.js 20+** | Runs the server and client |
 | **npm** | Installs dependencies |
-| **Codex CLI** | Starts `codex app-server` for coding tasks |
+| **Cursor Agent CLI** | Starts `agent acp`, the default coding backend |
+| **Codex CLI** | Optional alternative backend selected with `CODING_AGENT=codex` |
 | **Docker Engine (or Docker Desktop) with Compose v2** | Runs the self-hosted Firecrawl stack used by `web_search` |
 | **`rg` (ripgrep)** | Required by the `search_workspace` tool |
 | **OpenAI API key with access to `gpt-realtime-2`** | Authenticates Realtime API voice sessions |
-| **Codex login** | Authenticates Codex CLI app-server |
+| **Cursor Agent login** | Authenticates the default Cursor backend |
 | **Modern browser** | WebRTC and Web Audio support; Chrome, Edge, or Safari |
 
 > ⚠️ `gpt-realtime-2` is accessed through the OpenAI Realtime API. Your project must have access to both the **Realtime API** and the **`gpt-realtime-2` model**. Check the organization and project access settings in the OpenAI dashboard.
@@ -121,9 +123,9 @@ brew install ripgrep
 sudo apt install ripgrep
 ```
 
-### Two Authentication Paths
+### Authentication Paths
 
-The application uses two independent authentication paths: **voice through the Realtime API** and **coding through Codex CLI app-server**.
+The application authenticates voice through the Realtime API and authenticates the selected coding CLI separately.
 
 #### 1. `OPENAI_API_KEY` for the Realtime API
 
@@ -142,9 +144,21 @@ The API key remains **server-side only**. The browser receives only the SDP resp
 
 `web_search` does not use the OpenAI Responses API. It calls a **self-hosted Firecrawl** instance at `FIRECRAWL_BASE_URL`, which defaults to `http://localhost:3002`. See [Setting Up Self-Hosted Firecrawl with Docker](#setting-up-self-hosted-firecrawl-with-docker).
 
-#### 2. Codex CLI Login for Coding
+#### 2. Cursor Agent Login for Coding (Default)
 
-Authenticate Codex CLI **before** starting `npm run dev`.
+Authenticate Cursor Agent before starting `npm run dev`:
+
+```bash
+agent login
+agent status
+agent acp --help
+```
+
+The application lazily starts `agent acp` on the first coding task. Set `CURSOR_AGENT_COMMAND` only when the executable is not named `agent`, and set `CURSOR_MODEL` to a value listed by `agent models` when you want to override Cursor's default model.
+
+#### 3. Codex CLI Login for Coding (Optional)
+
+Set `CODING_AGENT=codex`, then authenticate Codex CLI before starting `npm run dev`.
 
 ```bash
 # 1. Install Codex CLI if necessary
@@ -159,14 +173,14 @@ codex
 
 If running `codex` directly produces a prompt, `codex app-server` can use the same credentials. Codex uses the CLI login and does not read `OPENAI_API_KEY` from `.env`; the API key is independently required for the Realtime API.
 
-#### 3. Optional Local Gateway Configuration
+#### 4. Optional Codex Gateway Configuration
 
-When `OPENAI_BASE_URL` points to something other than OpenAI, such as an internal gateway, that gateway must satisfy the requirements for both the voice and coding paths.
+When `OPENAI_BASE_URL` points to something other than OpenAI, such as an internal gateway, that gateway must satisfy the Realtime path. Codex can independently use a configured `model_provider`; Cursor does not use these Codex settings.
 
 | Path | Requirement |
 | --- | --- |
 | Voice through Realtime | The gateway must implement `POST {OPENAI_BASE_URL}/v1/realtime/calls` and accept multipart form data containing `sdp` and `session`. `OPENAI_API_KEY` becomes the gateway credential |
-| Web search through Firecrawl | Uses `POST /v2/search` at `FIRECRAWL_BASE_URL`; it does not use `OPENAI_BASE_URL` or Codex App Server |
+| Web search through Firecrawl | Uses `POST /v2/search` at `FIRECRAWL_BASE_URL`; it does not use `OPENAI_BASE_URL` or either coding backend |
 | Coding through Codex | Define `[model_providers.<name>]` in `~/.codex/config.toml` and select it with `CODEX_MODEL_PROVIDER`. The provider must expose the endpoint required by its `wire_api`, such as `POST /v1/responses` for `responses` |
 | Authentication | If the provider declares `env_key`, add that environment variable to `.env`; `codex app-server` inherits the server process environment |
 
@@ -178,7 +192,7 @@ If a gateway ignores the `session` part of the SDP exchange, the model will not 
 
 The `web_search` tool calls `POST /v2/search` on a Firecrawl instance that you run locally with Docker Compose. Firecrawl is a **separate repository** from this application; install it once, then leave the stack running while you use voice pair programming.
 
-Voice conversation and Codex coding work without Firecrawl. Only `web_search` fails when the stack is down.
+Voice conversation and coding-agent work continue without Firecrawl. Only `web_search` fails when the stack is down.
 
 ### 1. Check the prerequisites
 
@@ -309,7 +323,10 @@ $EDITOR .env
 #    (first-time install: see "Setting Up Self-Hosted Firecrawl with Docker")
 cd /path/to/firecrawl && docker compose up -d && cd -
 
-# 5. Start the development server
+# 5. Authenticate the default Cursor backend once, if needed
+agent login
+
+# 6. Start the development server
 npm run dev
 ```
 
@@ -354,7 +371,7 @@ Register a target Git repository before trying repository investigation or imple
 Select an existing project from the selector. When you switch projects:
 
 - The active GPT-Realtime-2 voice session is automatically **disconnected**.
-- Any active Codex task is **interrupted**.
+- Any active coding-agent task is **interrupted**.
 - Unapproved patches are **cleared**.
 - The next `CONNECT` starts a session with the new project context.
 
@@ -409,32 +426,32 @@ What scripts does package.json define?             → read_file
 Run the tests.                                     → run_tests, runs immediately
 ```
 
-Work that changes code goes to `codex_task`, and Codex then sends command or file-change requests to the approval UI. For the README example above, review the request and choose `APPROVE` or `DECLINE`. See [Realtime Tools](#realtime-tools) for the full registry and which calls bypass approval.
+Work that changes code goes to `coding_task`, and the configured agent can send command or file-change requests to the approval UI. For the README example above, review the request and choose `APPROVE` or `DECLINE`. See [Realtime Tools](#realtime-tools) for the full registry and which calls bypass approval.
 
-The **`INSPECT`** and **`TESTS`** buttons at the bottom of the UI are shortcuts that call the same local tools without going through Codex.
+The **`INSPECT`** and **`TESTS`** buttons at the bottom of the UI are shortcuts that call the same local tools without going through the coding agent.
 
 ---
 
-## Voice Interruption and Codex Tasks
+## Voice Interruption and Coding Tasks
 
-Elva responds when you use her name or when conversational context makes it clear that a question, command, or follow-up is directed at her. She stays silent for clear background conversation or speech directed elsewhere. If the target is genuinely unclear, she may ask one brief, gentle clarification without repeatedly insisting that you say “Elva.” When you begin speaking, the application stops only the currently playing audio response. An active **Codex CLI app-server** task continues running.
+Elva responds when you use her name or when conversational context makes it clear that a question, command, or follow-up is directed at her. She stays silent for clear background conversation or speech directed elsewhere. If the target is genuinely unclear, she may ask one brief, gentle clarification without repeatedly insisting that you say “Elva.” When you begin speaking, the application stops only the currently playing audio response. An active coding-agent task continues running.
 
-To stop a Codex task, explicitly say something such as “stop,” “interrupt,” or “cancel.” Only then does the browser abort the active `codex_task` and the server send `turn/interrupt` to `codex app-server`.
+To stop a coding task, explicitly say something such as “stop,” “interrupt,” or “cancel.” Only then does the browser abort the active `coding_task`. The server sends `session/cancel` to Cursor ACP or `turn/interrupt` to Codex app-server.
 
 ---
 
 ## Approval Flow
 
-Commands and file changes that require approval from Codex CLI app-server appear in the panel on the right. These operations are not permitted until you select `APPROVE` or `SESSION`.
+Commands and file changes that require approval from the configured coding agent appear in the panel on the right. These operations are not permitted until you select `APPROVE` or `SESSION`.
 
-This approval UI handles approval requests received from `codex app-server`. It is not a replacement for the Codex App desktop UI or every future Codex approval policy.
+This approval UI handles Cursor ACP permission requests and Codex app-server approval requests. It is not a replacement for either product's desktop UI or every future approval policy.
 
 ### Approval Panel Contents
 
-When one or more requests are waiting, the right panel automatically switches to **`Codex approval`**. When no approvals are pending, it displays `Pending patch`. The panel shows:
+When one or more requests are waiting, the right panel automatically switches to **`Coding approval`**. When no approvals are pending, it displays `Pending patch`. The panel shows:
 
-- **kind**: `command` or `file change` from current Codex versions; `command legacy` or `file change legacy` as fallbacks for older RPCs, which normally do not occur
-- **reason**: an optional explanation from Codex
+- **kind**: `Cursor tool` for ACP requests; `command` or `file change` for Codex, with legacy fallbacks for older RPCs
+- **reason**: an optional explanation from the configured agent
 - **cwd / root**: the command working directory or the root directory where changes are permitted
 - **command**: the shell command that will run, when applicable
 - **diff**: a unified diff assembled automatically from `item/fileChange/patchUpdated` notifications
@@ -444,8 +461,8 @@ When one or more requests are waiting, the right panel automatically switches to
 | Button | Meaning | Scope |
 | --- | --- | --- |
 | **`APPROVE`** | Allow this operation once | Single operation |
-| **`SESSION`** | Allow similar operations for the rest of the session | Until the current Codex thread ends |
-| **`DECLINE`** | Reject the request; Codex may try another approach or stop | — |
+| **`SESSION`** | Allow similar operations for the rest of the session | Until the current coding-agent session ends |
+| **`DECLINE`** | Reject the request; the agent may try another approach or stop | — |
 
 `SESSION` is convenient but grants broad permission. Use it only for operations within a trusted scope. Switching projects automatically clears the approval queue.
 
@@ -453,14 +470,14 @@ When one or more requests are waiting, the right panel automatically switches to
 
 The panel on the right displays two kinds of information in the **same location**:
 
-1. **Codex approvals, shown first**: displayed while Codex approval requests are pending
-2. **`propose_patch` patches**: displayed when the local `propose_patch` tool is called, either by Elva through the Realtime session or directly through the internal API. Codex's own file changes do not use this path; they arrive as approval requests instead. A staged patch is applied only when you press `APPLY`
+1. **Coding-agent approvals, shown first**: displayed while Cursor or Codex requests are pending
+2. **`propose_patch` patches**: displayed when the local `propose_patch` tool is called, either by Elva through the Realtime session or directly through the internal API. Coding-agent file changes do not use this path; they arrive through the agent's own approval flow instead. A staged patch is applied only when you press `APPLY`
 
 When multiple approval requests are pending, the upper-right corner shows the current position and count, such as `1/3`. Use the previous and next buttons to move through the queue. After one request is handled, the panel advances to the remaining requests.
 
 ### Notes
 
-- Pending approvals exist only in server memory. **Restarting `npm run dev` clears the approval queue** because the Codex process also restarts. Avoid leaving requests unattended for long periods.
+- Pending approvals exist only in server memory. **Restarting `npm run dev` clears the approval queue** and restarts the selected coding process. Avoid leaving requests unattended for long periods.
 - The approval UI polls every 1.5 seconds, so a request may take up to 1.5 seconds to appear. Replacing polling with SSE is a possible future improvement.
 
 ---
@@ -476,10 +493,13 @@ The following variables can be configured in `.env`:
 | `OPENAI_REALTIME_VOICE` | No | `marin` | GPT-Realtime-2 voice preset, such as `marin`, `cedar`, or `alloy` |
 | `FIRECRAWL_BASE_URL` | No | `http://localhost:3002` | Self-hosted Firecrawl endpoint used by `web_search`. Accepts an origin or a URL ending in `/v2`; `/v2/search` is appended as needed. Requires the [Docker stack](#setting-up-self-hosted-firecrawl-with-docker) |
 | `FIRECRAWL_API_KEY` | No | — | Sent as `Authorization: Bearer …`. Only needed for Firecrawl deployments with authentication enabled; the local stack with `USE_DB_AUTHENTICATION=false` does not use it |
+| `CODING_AGENT` | No | `cursor` | Selects the coding backend: `cursor` or `codex`. The model cannot change this at runtime; restart the server after changing it |
+| `CURSOR_AGENT_COMMAND` | No | `agent` | Cursor Agent CLI executable invoked as `<command> acp` |
+| `CURSOR_MODEL` | No | Cursor default | Optional model selected through the ACP session model option. Use `agent models` to see values available to the authenticated account |
 | `CODEX_MODEL` | No | `gpt-5.4` | Coding model for Codex CLI app-server, overriding the global Codex configuration. `gpt-5.5` is currently unsupported through app-server; see [Troubleshooting](#gpt-55-requires-a-newer-version-of-codex) |
 | `CODEX_MODEL_PROVIDER` | No | — | Selects `[model_providers.<name>]` from `~/.codex/config.toml` and passes it as `codex app-server -c model_provider=<name>`. **`--profile` is unsupported by app-server**; see [Troubleshooting](#--profile-only-applies-to-runtime-commands) |
 | `WORKSPACE_ROOT` | No | `process.cwd()` | Default workspace used to clean up legacy saved data |
-| `NO_PROJECT_WORKSPACE` | No | Temporary OS directory | Empty scratch directory used by Codex CLI app-server when no project is selected |
+| `NO_PROJECT_WORKSPACE` | No | Temporary OS directory | Empty scratch directory used by the selected coding agent when no project is selected |
 | `PROJECTS_FILE` | No | `.voice-pair-programmer/projects.json` | Storage path for registered projects |
 | `PROJECT_SEARCH_ROOTS` | No | Parent of this repository | Directories scanned by `Find repositories`, separated by `:` or `;` |
 | `TEST_COMMAND` | No | `npm test` | Command executed by the `run_tests` tool |
@@ -500,7 +520,7 @@ The quickest setup is to copy `.env.example` and then edit it.
 
 ## End-to-End Testing
 
-The Playwright suite launches the real Express/Vite application and a real Chromium browser. It remains deterministic by using a disposable Git repository under `.e2e/`, a fake Codex app-server executable, a local Firecrawl stub, and browser-level microphone and WebRTC fakes. The default suite does not call live OpenAI, Codex, or Firecrawl services.
+The Playwright suite launches the real Express/Vite application and a real Chromium browser. It remains deterministic by using a disposable Git repository under `.e2e/`, fake Cursor ACP and Codex app-server executables, a local Firecrawl stub, and browser-level microphone and WebRTC fakes. The default suite does not call live OpenAI, Cursor, Codex, or Firecrawl services.
 
 Install the pinned Chromium build once, then run the suite:
 
@@ -518,9 +538,9 @@ Additional commands:
 | `npm run test:e2e:debug` | Start Playwright Inspector |
 | `npm run test:e2e:typecheck` | Type-check the Playwright configuration and tests |
 
-The suite covers application loading, disconnected text turns, microphone errors, the Realtime connection and one-time Elva greeting, and every registered tool: `workspace_status`, `search_workspace`, `read_file`, `git_diff`, `run_tests`, `propose_patch`, `codex_task`, and `web_search`.
+The suite covers application loading, disconnected text turns, microphone errors, the Realtime connection and one-time Elva greeting, provider selection, Cursor ACP sessions, Codex compatibility, approvals, cancellation, and every registered tool: `workspace_status`, `search_workspace`, `read_file`, `git_diff`, `run_tests`, `propose_patch`, `coding_task`, and `web_search`. It also tests the legacy `codex_task` server alias.
 
-It also asserts the Realtime contract itself: that `GET /api/realtime/session` exposes all eight tools with schemas the Realtime API accepts, that every tool in `WORKSPACE_TOOL_NAMES` reaches the model, that the instructions steer real work to `codex_task`, and that each workspace tool refuses to run with no project selected and stays inside the selected project for path arguments. Registering a new workspace tool without exposing it fails `npm run typecheck` through the compile-time check in `src/server/realtime.ts`.
+It also asserts the Realtime contract itself: that `GET /api/realtime/session` exposes all eight tools with schemas the Realtime API accepts, that every tool in `WORKSPACE_TOOL_NAMES` reaches the model, that the instructions steer real work to `coding_task`, and that each workspace tool refuses to run with no project selected and stays inside the selected project for path arguments. Registering a new workspace tool without exposing it fails `npm run typecheck` through the compile-time check in `src/server/realtime.ts`.
 
 Traces, screenshots, and videos are retained under `test-results/` when a test fails. The HTML report is written to `playwright-report/`. These directories and the disposable `.e2e/` workspace are ignored by Git.
 
@@ -544,6 +564,18 @@ The OpenAI account may be out of credit or the project or organization may have 
 ### Model-Name or Access Errors After Clicking `CONNECT`
 
 The project may not have permission to use `gpt-realtime-2`. Check access to the Realtime API and the `gpt-realtime-2` model in the OpenAI dashboard. Access may differ by organization and project, so also verify that `OPENAI_API_KEY` was created under the intended project.
+
+### Cursor Agent Does Not Start or Authenticate
+
+Cursor is the default coding backend. Verify the local CLI before starting the application:
+
+```bash
+which agent
+agent status
+agent acp --help
+```
+
+Run `agent login` if authentication is missing. If the executable uses another path or name, set `CURSOR_AGENT_COMMAND`. If `CURSOR_MODEL` cannot be applied, run `agent models` and use one of the model values available to the authenticated account. Restart `npm run dev` after changing any coding-agent environment variable.
 
 ### Codex CLI app-server Authentication Error During `CONNECT`
 
@@ -649,13 +681,15 @@ flowchart LR
   Browser["Browser UI<br/>+ microphone"] -->|SDP offer| Server["Express"]
   Server -->|Realtime session + SDP| Realtime["OpenAI Realtime API<br/>gpt-realtime-2"]
   Realtime -->|audio + events| Browser
-  Realtime -->|codex_task tool call| Server
+  Realtime -->|coding_task tool call| Server
   Realtime -->|workspace tool calls<br/>status / search / read / diff<br/>tests / propose_patch| Server
   Realtime -->|web_search tool call| Server
   Server -->|POST /v2/search| Firecrawl["Self-hosted Firecrawl<br/>Docker Compose :3002"]
-  Server -->|JSONL stdio<br/>thread/start + turn/start| Codex["codex app-server"]
-  Browser -->|explicit stop only<br/>turn/interrupt| Server
-  Codex --> Workspace["Selected project<br/>or no-project temp workspace"]
+  Server -->|ACP JSONL stdio<br/>session/new + session/prompt| Cursor["Cursor Agent CLI<br/>agent acp (default)"]
+  Server -->|JSONL stdio<br/>thread/start + turn/start| Codex["codex app-server (optional)"]
+  Browser -->|explicit stop only| Server
+  Cursor --> Workspace["Selected project<br/>or no-project temp workspace"]
+  Codex --> Workspace
   Browser -->|manual shortcuts| Server
   Server --> Tools["git / rg / fs<br/>tests / git apply"]
 ```
@@ -663,12 +697,12 @@ flowchart LR
 - The browser sends an **SDP offer** to Express.
 - Express creates an OpenAI Realtime API session with `gpt-realtime-2` and returns the **SDP answer** to the browser.
 - Audio and Realtime events flow between the **browser and GPT-Realtime-2**.
-- When GPT-Realtime-2 determines that coding work is required, it emits a `codex_task` tool call. Express delegates the task to `turn/start` in `codex app-server`.
-- For quick repository questions it calls the local workspace tools instead. Those run in Express against the selected project and return in milliseconds, without a Codex turn. See [Realtime Tools](#realtime-tools).
-- When external or current information is required, it emits a `web_search` tool call instead. Express forwards it to `POST /v2/search` on the self-hosted Firecrawl instance and returns the top results with their sources. Web searches never go through Codex.
-- When the user begins speaking, only the audio response is stopped. A Codex task receives `turn/interrupt` only after an explicit instruction such as “stop” or “interrupt,” or when the connection is closed.
-- While connected, text-only messages use the GPT-Realtime-2 data channel. While disconnected, they use `turn/start` in `codex app-server`.
-- When no project is selected, Codex starts a thread in a temporary directory. Implementation work is performed only against a selected project.
+- When GPT-Realtime-2 determines that coding work is required, it emits a `coding_task` tool call. Express delegates the task to Cursor ACP by default or Codex app-server when `CODING_AGENT=codex`.
+- For quick repository questions it calls the local workspace tools instead. Those run in Express against the selected project and return in milliseconds, without a coding-agent turn. See [Realtime Tools](#realtime-tools).
+- When external or current information is required, it emits a `web_search` tool call instead. Express forwards it to `POST /v2/search` on the self-hosted Firecrawl instance and returns the top results with their sources. Web searches never go through the coding agent.
+- When the user begins speaking, only the audio response is stopped. An agent task receives Cursor `session/cancel` or Codex `turn/interrupt` only after an explicit instruction such as “stop” or “interrupt,” or when the connection is closed.
+- While connected, text-only messages use the GPT-Realtime-2 data channel. While disconnected, they use the generic coding-agent message route.
+- When no project is selected, the configured agent starts a session in a temporary directory. Implementation work is performed only against a selected project.
 
 ---
 
@@ -676,14 +710,14 @@ flowchart LR
 
 | Operation | When It Runs |
 | --- | --- |
-| Local shortcut tools, including the `INSPECT` and `TESTS` buttons or direct internal API calls | Immediately when clicked, without going through Codex |
+| Local shortcut tools, including the `INSPECT` and `TESTS` buttons or direct internal API calls | Immediately when clicked, without going through the coding agent |
 | Read-only workspace tools by voice: `workspace_status`, `search_workspace`, `read_file`, `git_diff` | Immediately, without approval. They only read inside the selected project and refuse to run when no project is selected |
 | `run_tests` by voice | **Immediately, without approval.** Runs `TEST_COMMAND` in the selected project, the same command as the `TESTS` button |
 | `propose_patch` by voice | Stages the diff in the patch panel. **Nothing is written until you press `APPLY`**, which then runs `git apply` in the selected project |
 | `web_search` through self-hosted Firecrawl | Runs immediately without approval. It is read-only and outbound, but note that Firecrawl sends requests from your machine to the target sites |
-| Voice interruption | Stops only the currently playing audio response; an active Codex task continues |
-| Explicit Codex task interruption | Sends `turn/interrupt` after phrases such as “stop,” “interrupt,” or “cancel,” or when disconnecting or switching projects |
-| Codex command execution and file changes | Appears in the approval UI and sends `APPROVE`, `SESSION`, or `DECLINE` to `codex app-server`. **Nothing runs until `APPROVE` or `SESSION` is selected** |
+| Voice interruption | Stops only the currently playing audio response; an active coding task continues |
+| Explicit coding-task interruption | Sends Cursor `session/cancel` or Codex `turn/interrupt` after phrases such as “stop,” “interrupt,” or “cancel,” or when disconnecting or switching projects |
+| Coding-agent operations that request permission | Appear in the approval UI and receive `APPROVE`, `SESSION`, or `DECLINE`. **The requested operation does not run until `APPROVE` or `SESSION` is selected** |
 
 Because `run_tests` executes the configured test command and the Realtime model can call it, review the behavior of test suites that may have side effects, and set `TEST_COMMAND` accordingly.
 
@@ -696,5 +730,5 @@ This application is a **local-development prototype**. Register only repositorie
 ## License and Notes
 
 - This is experimental code and is not intended for production use.
-- Codex and OpenAI usage charges depend on the active account and plan.
+- Cursor, Codex, and OpenAI usage charges depend on the active account and plan.
 - Patch application uses `git apply`, so targets are limited to the selected Git working tree.

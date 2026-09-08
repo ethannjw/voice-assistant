@@ -1,0 +1,166 @@
+#!/usr/bin/env node
+
+import readline from "node:readline";
+import { writeFileSync } from "node:fs";
+
+const lines = readline.createInterface({ input: process.stdin });
+const sessions = new Map();
+const pendingPrompts = new Map();
+const pendingPermissions = new Map();
+let sessionCounter = 0;
+
+function write(message) {
+  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
+}
+
+function respond(id, result) {
+  write({ id, result });
+}
+
+function sendAgentText(sessionId, text) {
+  write({
+    method: "session/update",
+    params: {
+      sessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text }
+      }
+    }
+  });
+}
+
+function promptText(params) {
+  return Array.isArray(params?.prompt)
+    ? params.prompt
+        .filter((block) => block?.type === "text")
+        .map((block) => block.text)
+        .join("\n")
+    : "";
+}
+
+function finishPrompt(request, suffix = "") {
+  const session = sessions.get(request.params.sessionId);
+  const text = promptText(request.params);
+  sendAgentText(
+    request.params.sessionId,
+    `Fake Cursor (${session?.model ?? "cursor-default"}, ${request.params.sessionId}) completed: ${text}${suffix}`
+  );
+  respond(request.id, { stopReason: "end_turn" });
+  pendingPrompts.delete(request.params.sessionId);
+}
+
+lines.on("line", (line) => {
+  if (!line.trim()) return;
+  const message = JSON.parse(line);
+
+  if (message.method === "initialize") {
+    respond(message.id, {
+      protocolVersion: 1,
+      agentCapabilities: {
+        loadSession: false,
+        promptCapabilities: { image: false, audio: false, embeddedContext: false }
+      },
+      authMethods: []
+    });
+    return;
+  }
+
+  if (message.method === "session/new") {
+    sessionCounter += 1;
+    const sessionId = `cursor-e2e-session-${sessionCounter}`;
+    sessions.set(sessionId, { model: "cursor-default" });
+    if (process.env.E2E_CURSOR_SESSION_MARKER) {
+      writeFileSync(process.env.E2E_CURSOR_SESSION_MARKER, sessionId, "utf8");
+    }
+    const response = {
+      sessionId,
+      modes: {
+        currentModeId: "agent",
+        availableModes: [{ id: "agent", name: "Agent", description: "Full coding mode" }]
+      },
+      configOptions: [
+        {
+          type: "select",
+          id: "model",
+          name: "Model",
+          description: "Cursor model",
+          category: "model",
+          currentValue: "cursor-default",
+          options: [
+            { value: "cursor-default", name: "Cursor Default" },
+            { value: "cursor-e2e-model", name: "Cursor E2E Model" }
+          ]
+        }
+      ]
+    };
+    if (process.env.E2E_CURSOR_BLOCK_SESSION === "1") return;
+    respond(message.id, response);
+    return;
+  }
+
+  if (message.method === "session/set_config_option") {
+    const session = sessions.get(message.params.sessionId);
+    if (session && message.params.configId === "model") {
+      session.model = message.params.value;
+    }
+    respond(message.id, { configOptions: [] });
+    return;
+  }
+
+  if (message.method === "session/prompt") {
+    pendingPrompts.set(message.params.sessionId, message);
+    if (process.env.E2E_CURSOR_PROMPT_MARKER) {
+      writeFileSync(process.env.E2E_CURSOR_PROMPT_MARKER, message.params.sessionId, "utf8");
+    }
+    const text = promptText(message.params);
+
+    if (text.includes("wait for cancellation")) {
+      return;
+    }
+
+    if (text.includes("needs approval")) {
+      const permissionId = 90_000 + pendingPermissions.size;
+      pendingPermissions.set(permissionId, message);
+      write({
+        id: permissionId,
+        method: "session/request_permission",
+        params: {
+          sessionId: message.params.sessionId,
+          toolCall: {
+            toolCallId: "cursor-tool-call",
+            title: "Run npm test",
+            kind: "execute",
+            status: "pending",
+            rawInput: { command: "npm test" }
+          },
+          options: [
+            { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+            { optionId: "allow-session", name: "Allow for session", kind: "allow_always" },
+            { optionId: "reject-once", name: "Reject", kind: "reject_once" }
+          ]
+        }
+      });
+      return;
+    }
+
+    finishPrompt(message);
+    return;
+  }
+
+  if (message.method === "session/cancel") {
+    const request = pendingPrompts.get(message.params.sessionId);
+    if (request) {
+      respond(request.id, { stopReason: "cancelled" });
+      pendingPrompts.delete(message.params.sessionId);
+    }
+    return;
+  }
+
+  if (message.id !== undefined && pendingPermissions.has(message.id)) {
+    const request = pendingPermissions.get(message.id);
+    pendingPermissions.delete(message.id);
+    const optionId = message.result?.outcome?.optionId ?? "cancelled";
+    finishPrompt(request, ` [permission=${optionId}]`);
+  }
+});
