@@ -8,11 +8,14 @@ import type { CodingAgent } from "../codingAgent";
 import type { TextTurnResult } from "../codex/types";
 import { CursorProcess } from "./process";
 import type { CursorSession, PendingCursorApproval } from "./types";
+import { TurnQueue } from "../lib/turnQueue";
 
 type Options = {
   command?: string;
   model?: string;
   noProjectWorkspace?: string;
+  requestTimeoutMs?: number;
+  turnTimeoutMs?: number;
 };
 
 export class CursorAgent implements CodingAgent {
@@ -22,6 +25,7 @@ export class CursorAgent implements CodingAgent {
   private readonly sessionCwds = new Map<string, string>();
   private readonly activeChunks = new Map<string, string[]>();
   private readonly pendingApprovals = new Map<string, PendingCursorApproval>();
+  private readonly turns = new TurnQueue();
 
   constructor(private readonly options: Options = {}) {
     this.process = new CursorProcess(options.command?.trim() || "agent", {
@@ -41,25 +45,32 @@ export class CursorAgent implements CodingAgent {
     text: string,
     signal?: AbortSignal
   ): Promise<TextTurnResult> {
+    return this.turns.run(projectPath ? path.resolve(projectPath) : "no-project", signal,
+      () => this.runTextTurnOnce(projectPath, text, signal));
+  }
+
+  private async runTextTurnOnce(projectPath: string | null, text: string, signal?: AbortSignal): Promise<TextTurnResult> {
     throwIfAborted(signal);
-    const session = await waitForAbort(this.getSession(projectPath), signal);
+    const session = await waitForAbort(this.withTimeout(
+      this.getSession(projectPath), this.options.requestTimeoutMs ?? 30_000, "session initialization"
+    ), signal);
     const context = await waitForAbort(this.process.getContext(), signal);
     const chunks: string[] = [];
     this.activeChunks.set(session.sessionId, chunks);
 
     const cancel = () => {
-      void context.notify(acp.methods.agent.session.cancel, { sessionId: session.sessionId });
+      void context.notify(acp.methods.agent.session.cancel, { sessionId: session.sessionId }).catch(() => {});
     };
     try {
       signal?.addEventListener("abort", cancel, { once: true });
       throwIfAborted(signal);
-      const response = await context.request(
+      const response = await this.withTimeout(context.request(
         acp.methods.agent.session.prompt,
         {
           sessionId: session.sessionId,
           prompt: [{ type: "text", text }]
         }
-      );
+      ), this.options.turnTimeoutMs ?? 300_000, "turn");
       throwIfAborted(signal);
       return {
         text: chunks.join("").trim(),
@@ -79,7 +90,7 @@ export class CursorAgent implements CodingAgent {
 
   resolveApproval(id: string, decision: CodexApprovalDecision) {
     const approval = this.pendingApprovals.get(id);
-    if (!approval) return false;
+    if (!approval || !approval.request.availableDecisions.includes(decision)) return false;
     this.pendingApprovals.delete(id);
 
     const option = selectPermissionOption(approval.options, decision);
@@ -92,6 +103,7 @@ export class CursorAgent implements CodingAgent {
   }
 
   async dispose() {
+    this.turns.dispose();
     this.cancelPendingApprovals();
     this.sessions.clear();
     this.sessionCwds.clear();
@@ -110,6 +122,18 @@ export class CursorAgent implements CodingAgent {
       this.sessions.set(cwd, session);
     }
     return session;
+  }
+
+  private withTimeout<Result>(operation: Promise<Result>, timeoutMs: number, label: string) {
+    let timer: ReturnType<typeof setTimeout>;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(`Cursor Agent timed out during ${label}.`);
+        reject(error);
+        this.process.restart(error);
+      }, timeoutMs);
+    });
+    return Promise.race([operation, deadline]).finally(() => clearTimeout(timer));
   }
 
   private async startSession(cwd: string): Promise<CursorSession> {
@@ -141,7 +165,7 @@ export class CursorAgent implements CodingAgent {
       await context.request(acp.methods.agent.session.setConfigOption, {
         sessionId: response.sessionId,
         configId: modelOption.id,
-        value: this.options.model
+        value: resolveModelValue(this.options.model, modelOption.options)
       });
     }
 
@@ -198,9 +222,20 @@ export class CursorAgent implements CodingAgent {
   }
 }
 
+function resolveModelValue(configuredModel: string, options: acp.SessionConfigSelectOptions) {
+  const values = options.flatMap((option) => "group" in option ? option.options : [option])
+    .map((option) => option.value);
+  if (values.includes(configuredModel) || configuredModel.includes("[")) return configuredModel;
+  const matches = [...new Set(values.filter((value) => value.split("[")[0] === configuredModel))];
+  if (matches.length > 1) {
+    throw new Error(`CURSOR_MODEL=${configuredModel} matches multiple variants. Use an exact model value: ${matches.join(", ")}`);
+  }
+  return matches[0] ?? configuredModel;
+}
+
 function availableDecisions(options: acp.PermissionOption[]): CodexApprovalDecision[] {
   const decisions: CodexApprovalDecision[] = [];
-  if (options.some((option) => option.kind === "allow_once" || option.kind === "allow_always")) {
+  if (options.some((option) => option.kind === "allow_once")) {
     decisions.push("accept");
   }
   if (options.some((option) => option.kind === "allow_always")) {
@@ -215,16 +250,12 @@ function selectPermissionOption(
   decision: CodexApprovalDecision
 ) {
   if (decision === "acceptForSession") {
-    return options.find((option) => option.kind === "allow_always") ?? options.find(isAllowOption);
+    return options.find((option) => option.kind === "allow_always");
   }
   if (decision === "accept") {
-    return options.find((option) => option.kind === "allow_once") ?? options.find(isAllowOption);
+    return options.find((option) => option.kind === "allow_once");
   }
   return options.find((option) => option.kind === "reject_once") ?? options.find(isRejectOption);
-}
-
-function isAllowOption(option: acp.PermissionOption) {
-  return option.kind === "allow_once" || option.kind === "allow_always";
 }
 
 function isRejectOption(option: acp.PermissionOption) {

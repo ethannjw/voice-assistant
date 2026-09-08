@@ -9,6 +9,7 @@ import {
   buildLegacyFileApproval
 } from "./approvals";
 import { CodexProcess } from "./process";
+import { TurnQueue, waitForAbort } from "../lib/turnQueue";
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_TURN_TIMEOUT_MS,
@@ -44,17 +45,20 @@ export class CodexAppServer {
   private readonly pendingTurnDiffs = new Map<string, string>();
   private readonly notificationListeners = new Set<(message: RpcMessage) => void>();
   private readonly threadSessions = new Map<string, Promise<ThreadSession>>();
+  private readonly turns = new TurnQueue();
+  private readonly processExitListeners = new Set<(reason: Error) => void>();
 
   constructor(private readonly options: Options = {}) {
     this.process = new CodexProcess(
       {
         onMessage: (message) => this.handleIncoming(message),
-        onProcessExit: () => {
+        onProcessExit: (reason) => {
           this.initializePromise = null;
           this.threadSessions.clear();
           this.pendingApprovals.clear();
           this.pendingFileDiffs.clear();
           this.pendingTurnDiffs.clear();
+          for (const listener of this.processExitListeners) listener(reason);
         }
       },
       { modelProvider: options.modelProvider }
@@ -64,15 +68,15 @@ export class CodexAppServer {
   // ---------- Public API used by routes ----------
 
   async runTextTurn(projectPath: string | null, text: string, signal?: AbortSignal): Promise<TextTurnResult> {
-    try {
-      return await this.runTextTurnOnce(projectPath, text, signal);
-    } catch (error) {
-      if (!isStaleCodexVersionError(error)) {
-        throw error;
+    return this.turns.run(projectPath ? path.resolve(projectPath) : "no-project", signal, async () => {
+      try {
+        return await this.runTextTurnOnce(projectPath, text, signal);
+      } catch (error) {
+        if (!isStaleCodexVersionError(error)) throw error;
+        this.restartProcess();
+        return await this.runTextTurnOnce(projectPath, text, signal);
       }
-      this.restartProcess();
-      return await this.runTextTurnOnce(projectPath, text, signal);
-    }
+    });
   }
 
   listPendingApprovals() {
@@ -81,7 +85,7 @@ export class CodexAppServer {
 
   resolveApproval(id: string, decision: CodexApprovalDecision) {
     const approval = this.pendingApprovals.get(id);
-    if (!approval) return false;
+    if (!approval || !approval.request.availableDecisions.includes(decision)) return false;
 
     this.pendingApprovals.delete(id);
     if (approval.itemId) this.pendingFileDiffs.delete(approval.itemId);
@@ -92,6 +96,7 @@ export class CodexAppServer {
   }
 
   async dispose() {
+    this.turns.dispose();
     this.process.stop();
   }
 
@@ -103,10 +108,12 @@ export class CodexAppServer {
     signal?: AbortSignal
   ): Promise<TextTurnResult> {
     throwIfAborted(signal);
-    const session = await this.getThreadSession(projectPath);
+    const session = await waitForAbort(this.getThreadSession(projectPath), signal);
+    throwIfAborted(signal);
     const chunks: string[] = [];
     let turnId: string | null = null;
     let removeAbortListener: (() => void) | null = null;
+    let interruption: Promise<unknown> | undefined;
     const completionAbortController = new AbortController();
     const abortCompletionWait = () => completionAbortController.abort();
     signal?.addEventListener("abort", abortCompletionWait, { once: true });
@@ -114,7 +121,7 @@ export class CodexAppServer {
     const unsubscribe = this.onNotification((message) => {
       if (message.method !== "item/agentMessage/delta") return;
       const params = message.params ?? {};
-      if (params.threadId === session.threadId) {
+      if (params.threadId === session.threadId && (!turnId || !params.turnId || params.turnId === turnId)) {
         chunks.push(String(params.delta ?? ""));
       }
     });
@@ -143,7 +150,7 @@ export class CodexAppServer {
       turnId = response.turn?.id ?? null;
       if (signal && turnId) {
         const interruptTurn = () => {
-          void this.process
+          interruption = this.process
             .request("turn/interrupt", { threadId: session.threadId, turnId }, DEFAULT_REQUEST_TIMEOUT_MS)
             .catch(() => {});
         };
@@ -174,6 +181,14 @@ export class CodexAppServer {
       signal?.removeEventListener("abort", abortCompletionWait);
       completionAbortController.abort();
       unsubscribe();
+      for (const [id, approval] of this.pendingApprovals) {
+        if (turnId && approval.turnId === turnId) {
+          this.pendingApprovals.delete(id);
+          if (approval.itemId) this.pendingFileDiffs.delete(approval.itemId);
+        }
+      }
+      if (turnId) this.pendingTurnDiffs.delete(turnId);
+      await interruption;
     }
   }
 
@@ -188,7 +203,10 @@ export class CodexAppServer {
     const existing = this.threadSessions.get(key);
     if (existing) return existing;
 
-    const created = this.startThread(cwd, hasProject);
+    const created = this.startThread(cwd, hasProject).catch((error) => {
+      this.threadSessions.delete(key);
+      throw error;
+    });
     this.threadSessions.set(key, created);
     return created;
   }
@@ -213,7 +231,10 @@ export class CodexAppServer {
 
   private async ensureInitialized() {
     if (this.initializePromise) return this.initializePromise;
-    this.initializePromise = this.initialize();
+    this.initializePromise = this.initialize().catch((error) => {
+      this.initializePromise = null;
+      throw error;
+    });
     return this.initializePromise;
   }
 
@@ -430,6 +451,13 @@ export class CodexAppServer {
         reject(createAbortError());
       };
 
+      const processExit = (reason: Error) => {
+        cleanup();
+        reject(reason);
+      };
+      const processExitListeners = this.processExitListeners;
+      processExitListeners.add(processExit);
+
       const unsubscribe = this.onNotification((message) => {
         if (message.method !== method || !predicate(message.params ?? {})) return;
         cleanup();
@@ -443,6 +471,7 @@ export class CodexAppServer {
       function cleanup() {
         clearTimeout(timer);
         unsubscribe();
+        processExitListeners.delete(processExit);
         signal?.removeEventListener("abort", abort);
       }
     });

@@ -52,6 +52,8 @@ export class CodexProcess {
 
   ensureSpawned() {
     if (this.child) return;
+    this.stderrBuffer = "";
+    this.stdoutBuffer = "";
 
     const child = spawn("codex", buildCodexArgs(this.options.modelProvider), {
       cwd: process.cwd(),
@@ -61,18 +63,29 @@ export class CodexProcess {
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => this.handleStdout(chunk));
-    child.stderr.on("data", (chunk: string) => {
-      this.stderrBuffer = `${this.stderrBuffer}${chunk}`.slice(-STDERR_BUFFER_LIMIT);
+    child.stdout.on("data", (chunk: string) => {
+      if (this.child === child) this.handleStdout(chunk);
     });
+    child.stderr.on("data", (chunk: string) => {
+      if (this.child === child) {
+        this.stderrBuffer = `${this.stderrBuffer}${chunk}`.slice(-STDERR_BUFFER_LIMIT);
+      }
+    });
+    const fail = (reason: Error) => {
+      if (this.child !== child) return;
+      this.child = null;
+      if (!child.killed) child.kill();
+      this.rejectAllPending(reason);
+      this.listeners.onProcessExit(reason);
+    };
+    child.on("error", (error) => fail(new Error(`Could not start Codex App Server. Install or authenticate Codex CLI. ${error.message}`)));
+    child.stdin.on("error", fail);
     child.on("exit", (code, signal) => {
       if (this.child !== child) return;
       const reason = `Codex App Server exited${code === null ? "" : ` with code ${code}`}${
         signal ? ` (${signal})` : ""
       }.${this.stderrBuffer ? `\n${this.stderrBuffer.trim()}` : ""}`;
-      this.child = null;
-      this.rejectAllPending(new Error(reason));
-      this.listeners.onProcessExit(new Error(reason));
+      fail(new Error(reason));
     });
 
     this.child = child;
@@ -87,7 +100,9 @@ export class CodexProcess {
   stop() {
     this.child?.kill();
     this.child = null;
-    this.rejectAllPending(new Error("Codex App Server was stopped."));
+    const reason = new Error("Codex App Server was stopped.");
+    this.rejectAllPending(reason);
+    this.listeners.onProcessExit(reason);
   }
 
   /** Send a JSON-RPC request and return a promise resolving with the result. */

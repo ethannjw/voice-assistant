@@ -1,6 +1,6 @@
 # Voice Pair Programmer
 
-This proof-of-concept prototype uses the **OpenAI Realtime API (`gpt-realtime-2`)** for voice input and output, **self-hosted Firecrawl** for web search, and a configurable coding backend for repository investigation, command execution, and file editing. **Cursor Agent over ACP is the default**, with **Codex CLI app-server** available through an environment variable.
+This proof-of-concept prototype provides a voice assistant called **Elva**. It uses the **OpenAI Realtime API (`gpt-realtime-2`)** for voice input and output, **self-hosted Firecrawl** for web search, and a configurable coding backend for repository investigation, command execution, and file editing. **Cursor Agent over ACP is the default**, with **Codex CLI app-server** available through an environment variable.
 
 When you speak through the browser microphone, audio is sent directly to the Realtime API over WebRTC and the response is played back. Coding requests are forwarded through `coding_task` to the configured backend, and permission requests can be reviewed through the approval UI.
 
@@ -155,6 +155,8 @@ agent acp --help
 ```
 
 The application lazily starts `agent acp` on the first coding task. Set `CURSOR_AGENT_COMMAND` only when the executable is not named `agent`, and set `CURSOR_MODEL` to a value listed by `agent models` when you want to override Cursor's default model.
+
+ACP may advertise a parameterized model value such as `composer-2.5[fast=true]`. A bare `CURSOR_MODEL=composer-2.5` resolves to that value when exactly one matching variant is advertised. If multiple variants exist, specify the exact value; the app does not guess or silently choose another model. Explicit parameterized values are passed through unchanged.
 
 #### 3. Codex CLI Login for Coding (Optional)
 
@@ -496,6 +498,8 @@ The following variables can be configured in `.env`:
 | `CODING_AGENT` | No | `cursor` | Selects the coding backend: `cursor` or `codex`. The model cannot change this at runtime; restart the server after changing it |
 | `CURSOR_AGENT_COMMAND` | No | `agent` | Cursor Agent CLI executable invoked as `<command> acp` |
 | `CURSOR_MODEL` | No | Cursor default | Optional model selected through the ACP session model option. Use `agent models` to see values available to the authenticated account |
+| `CURSOR_REQUEST_TIMEOUT_MS` | No | `30000` | Deadline for Cursor initialization and session setup |
+| `CURSOR_TURN_TIMEOUT_MS` | No | `300000` | Deadline for a Cursor task, including time awaiting approvals; increase for longer coding sessions |
 | `CODEX_MODEL` | No | `gpt-5.4` | Coding model for Codex CLI app-server, overriding the global Codex configuration. `gpt-5.5` is currently unsupported through app-server; see [Troubleshooting](#gpt-55-requires-a-newer-version-of-codex) |
 | `CODEX_MODEL_PROVIDER` | No | — | Selects `[model_providers.<name>]` from `~/.codex/config.toml` and passes it as `codex app-server -c model_provider=<name>`. **`--profile` is unsupported by app-server**; see [Troubleshooting](#--profile-only-applies-to-runtime-commands) |
 | `WORKSPACE_ROOT` | No | `process.cwd()` | Default workspace used to clean up legacy saved data |
@@ -533,12 +537,22 @@ Additional commands:
 
 | Command | Purpose |
 | --- | --- |
+| `npm test` | Run both typechecks, the production build, and the complete deterministic suite |
+| `npm run test:cursor` | Run Cursor-focused adapter and connected browser regression tests |
 | `npm run test:e2e:headed` | Run with a visible Chromium window |
 | `npm run test:e2e:ui` | Open Playwright's interactive UI |
 | `npm run test:e2e:debug` | Start Playwright Inspector |
 | `npm run test:e2e:typecheck` | Type-check the Playwright configuration and tests |
 
 The suite covers application loading, disconnected text turns, microphone errors, the Realtime connection and one-time Elva greeting, provider selection, Cursor ACP sessions, Codex compatibility, approvals, cancellation, and every registered tool: `workspace_status`, `search_workspace`, `read_file`, `git_diff`, `run_tests`, `propose_patch`, `coding_task`, and `web_search`. It also tests the legacy `codex_task` server alias.
+
+`e2e/cursor-browser.spec.ts` keeps the coding-agent HTTP endpoints real: browser text and simulated Realtime calls reach Express, the Cursor adapter, and the fake ACP executable. Approval and denial are checked against actual disposable file changes, and disconnect must remove pending approvals without editing files. Only external voice transport and font loading are stubbed in these journeys.
+
+`e2e/provider-contract.spec.ts` exercises both adapters against strict protocol fakes, including overlapping tasks, cancellation during initialization, process failure, disposal, approval cleanup, and recovery. Cursor also has queued-cancellation, model negotiation, permission-scope, and stalled-session/turn regressions. Cursor startup defaults to a 30-second deadline and turns to five minutes, configurable through `CURSOR_REQUEST_TIMEOUT_MS` and `CURSOR_TURN_TIMEOUT_MS`; an expired deadline resets the process rather than leaving the workspace queue stuck. For longer coding sessions, for example, set `CURSOR_TURN_TIMEOUT_MS=1800000` for thirty minutes.
+
+When extending the integration, add a protocol scenario and assert observable results, correlation IDs, and file side effects—not just HTTP success or membership in a tool-name list. To stress the Cursor lifecycle cases, run `npm run test:e2e -- e2e/provider-contract.spec.ts --grep 'cursor provider contract' --repeat-each=5`.
+
+These fakes do not certify authentication or compatibility with a newly installed real CLI. Check `agent --version`, `agent acp --help`, and `agent status` separately. Live model tasks must be explicitly opted into and use disposable workspaces; they are not part of `npm test`.
 
 It also asserts the Realtime contract itself: that `GET /api/realtime/session` exposes all eight tools with schemas the Realtime API accepts, that every tool in `WORKSPACE_TOOL_NAMES` reaches the model, that the instructions steer real work to `coding_task`, and that each workspace tool refuses to run with no project selected and stays inside the selected project for path arguments. Registering a new workspace tool without exposing it fails `npm run typecheck` through the compile-time check in `src/server/realtime.ts`.
 

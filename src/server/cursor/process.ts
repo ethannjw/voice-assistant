@@ -26,24 +26,31 @@ export class CursorProcess {
   ) {}
 
   getContext() {
+    if (this.disposed) return Promise.reject(new Error("Cursor Agent was stopped."));
     if (!this.contextPromise) {
-      this.contextPromise = this.spawnAndInitialize().catch((error) => {
-        this.contextPromise = null;
+      const pending = this.spawnAndInitialize().catch((error) => {
+        if (this.contextPromise === pending) this.contextPromise = null;
         throw error;
       });
+      this.contextPromise = pending;
     }
     return this.contextPromise;
   }
 
   async dispose() {
     this.disposed = true;
-    this.connection?.close();
+    this.restart(new Error("Cursor Agent was stopped."));
+  }
+
+  restart(reason: Error) {
+    const connection = this.connection;
+    const child = this.child;
     this.connection = null;
     this.contextPromise = null;
-    if (this.child && !this.child.killed) {
-      this.child.kill();
-    }
     this.child = null;
+    connection?.close(reason);
+    if (child && !child.killed) child.kill();
+    if (!this.disposed) this.listeners.onProcessExit(reason);
   }
 
   private async spawnAndInitialize() {
@@ -54,25 +61,27 @@ export class CursorProcess {
     });
 
     await waitForSpawn(child, this.command);
+    if (this.disposed) {
+      child.kill();
+      throw new Error("Cursor Agent was stopped.");
+    }
     this.child = child;
     this.stderrBuffer = "";
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       this.stderrBuffer = `${this.stderrBuffer}${chunk}`.slice(-STDERR_BUFFER_LIMIT);
     });
-    child.on("exit", (code, signal) => {
+    const fail = (reason: Error) => {
       if (this.child !== child) return;
-      const reason = new Error(
+      this.restart(reason);
+    };
+    child.on("error", fail);
+    child.on("exit", (code, signal) => {
+      fail(new Error(
         `Cursor Agent exited${code === null ? "" : ` with code ${code}`}${
           signal ? ` (${signal})` : ""
         }.${this.stderrBuffer ? `\n${this.stderrBuffer.trim()}` : ""}`
-      );
-      this.child = null;
-      this.connection = null;
-      this.contextPromise = null;
-      if (!this.disposed) {
-        this.listeners.onProcessExit(reason);
-      }
+      ));
     });
 
     const stream = acp.ndJsonStream(
@@ -89,6 +98,9 @@ export class CursorProcess {
       });
     const connection = app.connect(stream);
     this.connection = connection;
+    connection.signal.addEventListener("abort", () => {
+      fail(new Error(`Cursor Agent connection closed: ${formatError(connection.signal.reason)}`));
+    }, { once: true });
 
     try {
       await connection.agent.request(acp.methods.agent.initialize, {

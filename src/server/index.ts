@@ -23,6 +23,8 @@ const codingAgent = createCodingAgent({
   provider: env.codingAgent,
   cursorCommand: env.cursorAgentCommand,
   cursorModel: env.cursorModel,
+  cursorRequestTimeoutMs: env.cursorRequestTimeoutMs,
+  cursorTurnTimeoutMs: env.cursorTurnTimeoutMs,
   codexModel: env.codexModel,
   codexModelProvider: env.codexModelProvider,
   noProjectWorkspace: env.noProjectWorkspace

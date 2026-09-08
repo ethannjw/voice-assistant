@@ -2,12 +2,29 @@
 
 import readline from "node:readline";
 import { writeFileSync } from "node:fs";
+import { applyEdit, record, validateWorkspace, waitForGate } from "../protocol.mjs";
+
+if (process.argv.includes("--version")) {
+  console.log("cursor-agent e2e");
+  process.exit(0);
+}
+if (process.argv[2] !== "acp") process.exit(2);
 
 const lines = readline.createInterface({ input: process.stdin });
 const sessions = new Map();
 const pendingPrompts = new Map();
 const pendingPermissions = new Map();
+const cancelledPermissions = new Set();
 let sessionCounter = 0;
+let permissionCounter = 90000;
+let initialized = false;
+const modelOptions = [
+  { value: "cursor-default", name: "Cursor Default" },
+  { value: "cursor-e2e-model", name: "Cursor E2E Model" },
+  { value: "composer-2.5[fast=true]", name: "Composer 2.5" },
+  { value: "ambiguous-model[fast=true]", name: "Fast variant" },
+  { value: "ambiguous-model[fast=false]", name: "Standard variant" }
+];
 
 function write(message) {
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
@@ -50,11 +67,17 @@ function finishPrompt(request, suffix = "") {
   pendingPrompts.delete(request.params.sessionId);
 }
 
-lines.on("line", (line) => {
+lines.on("line", async (line) => {
   if (!line.trim()) return;
   const message = JSON.parse(line);
+  record(message);
 
   if (message.method === "initialize") {
+    if (message.params?.protocolVersion !== 1) {
+      write({ id: message.id, error: { code: -32602, message: "Unsupported protocol" } });
+      return;
+    }
+    initialized = true;
     respond(message.id, {
       protocolVersion: 1,
       agentCapabilities: {
@@ -67,9 +90,11 @@ lines.on("line", (line) => {
   }
 
   if (message.method === "session/new") {
+    if (!initialized) throw new Error("Initialize first");
+    validateWorkspace(message.params?.cwd);
     sessionCounter += 1;
     const sessionId = `cursor-e2e-session-${sessionCounter}`;
-    sessions.set(sessionId, { model: "cursor-default" });
+    sessions.set(sessionId, { model: "cursor-default", cwd: message.params.cwd });
     if (process.env.E2E_CURSOR_SESSION_MARKER) {
       writeFileSync(process.env.E2E_CURSOR_SESSION_MARKER, sessionId, "utf8");
     }
@@ -87,40 +112,52 @@ lines.on("line", (line) => {
           description: "Cursor model",
           category: "model",
           currentValue: "cursor-default",
-          options: [
-            { value: "cursor-default", name: "Cursor Default" },
-            { value: "cursor-e2e-model", name: "Cursor E2E Model" }
-          ]
+          options: process.env.E2E_CURSOR_GROUP_MODELS === "1"
+            ? [{ group: "models", name: "Models", options: modelOptions }]
+            : modelOptions
         }
       ]
     };
     if (process.env.E2E_CURSOR_BLOCK_SESSION === "1") return;
+    await waitForGate();
     respond(message.id, response);
     return;
   }
 
   if (message.method === "session/set_config_option") {
     const session = sessions.get(message.params.sessionId);
-    if (session && message.params.configId === "model") {
-      session.model = message.params.value;
+    if (!session || message.params.configId !== "model" || !modelOptions.some((option) => option.value === message.params.value)) {
+      write({ id: message.id, error: { code: -32602, message: "Unsupported model configuration" } });
+      return;
     }
+    session.model = message.params.value;
     respond(message.id, { configOptions: [] });
     return;
   }
 
   if (message.method === "session/prompt") {
+    if (!sessions.has(message.params?.sessionId) || pendingPrompts.has(message.params.sessionId)) {
+      write({ id: message.id, error: { code: -32602, message: "Unknown session or concurrent prompt" } });
+      return;
+    }
     pendingPrompts.set(message.params.sessionId, message);
     if (process.env.E2E_CURSOR_PROMPT_MARKER) {
       writeFileSync(process.env.E2E_CURSOR_PROMPT_MARKER, message.params.sessionId, "utf8");
     }
     const text = promptText(message.params);
+    if (text.includes("e2e:crash")) process.exit(7);
+    if (text.includes("e2e:fail")) {
+      pendingPrompts.delete(message.params.sessionId);
+      write({ id: message.id, error: { code: -32000, message: "E2E turn failed" } });
+      return;
+    }
 
     if (text.includes("wait for cancellation")) {
       return;
     }
 
-    if (text.includes("needs approval")) {
-      const permissionId = 90_000 + pendingPermissions.size;
+    if (text.includes("needs approval") || text.includes("e2e:edit")) {
+      const permissionId = ++permissionCounter;
       pendingPermissions.set(permissionId, message);
       write({
         id: permissionId,
@@ -135,7 +172,7 @@ lines.on("line", (line) => {
             rawInput: { command: "npm test" }
           },
           options: [
-            { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+            ...text.includes("persistent-only") ? [] : [{ optionId: "allow-once", name: "Allow once", kind: "allow_once" }],
             { optionId: "allow-session", name: "Allow for session", kind: "allow_always" },
             { optionId: "reject-once", name: "Reject", kind: "reject_once" }
           ]
@@ -149,6 +186,13 @@ lines.on("line", (line) => {
   }
 
   if (message.method === "session/cancel") {
+    for (const [permissionId, pending] of pendingPermissions) {
+      if (pending.params.sessionId === message.params.sessionId) {
+        write({ method: "$/cancel_request", params: { requestId: permissionId } });
+        pendingPermissions.delete(permissionId);
+        cancelledPermissions.add(permissionId);
+      }
+    }
     const request = pendingPrompts.get(message.params.sessionId);
     if (request) {
       respond(request.id, { stopReason: "cancelled" });
@@ -161,6 +205,13 @@ lines.on("line", (line) => {
     const request = pendingPermissions.get(message.id);
     pendingPermissions.delete(message.id);
     const optionId = message.result?.outcome?.optionId ?? "cancelled";
+    if (optionId.startsWith("allow") && promptText(request.params).includes("e2e:edit")) {
+      applyEdit(sessions.get(request.params.sessionId).cwd, "cursor");
+    }
     finishPrompt(request, ` [permission=${optionId}]`);
+    return;
   }
+  if (message.method === "$/cancel_request") return;
+  if (cancelledPermissions.delete(message.id)) return;
+  if (message.id !== undefined) write({ id: message.id, error: { code: -32601, message: `Unsupported method: ${message.method}` } });
 });

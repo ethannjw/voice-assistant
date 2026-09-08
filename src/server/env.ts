@@ -7,6 +7,16 @@ const codexModelProvider = process.env.CODEX_MODEL_PROVIDER?.trim() || undefined
 const codingAgent = parseCodingAgentName(process.env.CODING_AGENT);
 const cursorModel = process.env.CURSOR_MODEL?.trim() || undefined;
 
+function readTimeout(name: string, fallback: number) {
+  const value = process.env[name]?.trim();
+  if (!value) return fallback;
+  const milliseconds = Number(value);
+  if (!Number.isSafeInteger(milliseconds) || milliseconds <= 0 || milliseconds > 2_147_483_647) {
+    throw new Error(`${name} must be a positive integer in milliseconds, at most 2147483647.`);
+  }
+  return milliseconds;
+}
+
 if (process.env.CODEX_PROFILE?.trim()) {
   console.warn(
     "CODEX_PROFILE is ignored: codex-cli does not accept --profile for `app-server`. " +
@@ -25,6 +35,8 @@ export const env = {
   codingAgent,
   cursorAgentCommand: process.env.CURSOR_AGENT_COMMAND?.trim() || "agent",
   cursorModel,
+  cursorRequestTimeoutMs: readTimeout("CURSOR_REQUEST_TIMEOUT_MS", 30_000),
+  cursorTurnTimeoutMs: readTimeout("CURSOR_TURN_TIMEOUT_MS", 300_000),
   codexModelProvider,
   // gpt-5.5 is rejected by codex app-server's thread/start as of CLI 0.130; use 5.4.
   // With a custom model_provider, set CODEX_MODEL to a model that provider serves.

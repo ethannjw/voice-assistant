@@ -19,6 +19,8 @@ type CreateCodingAgentOptions = {
   provider: CodingAgentName;
   cursorCommand?: string;
   cursorModel?: string;
+  cursorRequestTimeoutMs?: number;
+  cursorTurnTimeoutMs?: number;
   codexModel?: string;
   codexModelProvider?: string;
   noProjectWorkspace?: string;
@@ -37,6 +39,8 @@ export function createCodingAgent(options: CreateCodingAgentOptions): CodingAgen
     return new CursorAgent({
       command: options.cursorCommand,
       model: options.cursorModel,
+      requestTimeoutMs: options.cursorRequestTimeoutMs,
+      turnTimeoutMs: options.cursorTurnTimeoutMs,
       noProjectWorkspace: options.noProjectWorkspace
     });
   }
