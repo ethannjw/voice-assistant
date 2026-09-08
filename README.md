@@ -270,7 +270,7 @@ curl -X POST http://localhost:3002/v2/search \
   -d '{"query":"openai realtime api","limit":3,"sources":["web"]}'
 ```
 
-A successful response contains a `data.web` array of results with `title`, `url`, and `description`. That is exactly the shape `src/server/webSearch.ts` parses, so if this `curl` succeeds, `web_search` works.
+A successful response contains a `data.web` array of results with `title`, `url`, and `description`. This verifies search connectivity, not whether Elva receives enough content to answer a question. Numerical facts may exist only in the underlying page. Follow `docs/testing/diagnostics.md` to compare snippets, scraped Markdown, and the app's tool output.
 
 ### 6. Point this application at the instance
 
@@ -342,14 +342,14 @@ Open **<http://localhost:8787>** in your browser.
 2. Confirm that the status in the upper-right corner is **`IDLE`**.
 3. Click the green **`CONNECT`** button.
 4. Allow microphone access when the browser prompts you for permission.
-5. The connection is ready when the status changes to **`CONNECTED`**. Elva automatically greets you when the voice connection is ready.
-6. Speak into the microphone or send text through the input field at the bottom.
+5. The connection is ready when the status changes to **`CONNECTED`** and the attention indicator says **Waiting for Elva**. Connecting is silent. Microphone transmission and playback remain disabled until manual response control is confirmed.
+6. Address Elva to start an exchange, or send text through the input field at the bottom.
 
 You can address the assistant by its wake name and try saying:
 
 > "Elva, hello, are you there?"
 
-Elva also responds when a direct question, command, or follow-up is clearly meant for her. If it is genuinely unclear, she may ask one brief clarification instead of repeatedly asking you to use her name.
+After an invitation, the indicator changes to **In conversation**. Clear follow-ups such as “Why?” or “Show me an example” do not need her name. After 30 seconds without an exchange with Elva, or an explicit dismissal, she waits for another invitation. Side conversation, quoted mentions of her name, and uncertain addressees should remain silent rather than trigger “Were you asking me?”
 
 If you hear a spoken response, the connection is working. Voice chat works even when no project is selected.
 
@@ -436,9 +436,15 @@ The **`INSPECT`** and **`TESTS`** buttons at the bottom of the UI are shortcuts 
 
 ## Voice Interruption and Coding Tasks
 
-Elva responds when you use her name or when conversational context makes it clear that a question, command, or follow-up is directed at her. She stays silent for clear background conversation or speech directed elsewhere. If the target is genuinely unclear, she may ask one brief, gentle clarification without repeatedly insisting that you say “Elva.” When you begin speaking, the application stops only the currently playing audio response. An active coding-agent task continues running.
+Each committed audio turn first receives a text-only, out-of-band attention check on the configured Realtime connection. It has only a private `attention_decision` function schema: no workspace tools, coding delegation, or spoken output. The app requests an audible response only after validating the correlated decision arguments. Background speech does not renew the 30-second window, interrupt audio, or cancel coding work. Authorized audio playback keeps the exchange active until playback ends.
 
-To stop a coding task, explicitly say something such as “stop,” “interrupt,” or “cancel.” Only then does the browser abort the active `coding_task`. The server sends `session/cancel` to Cursor ACP or `turn/interrupt` to Codex app-server.
+A clear follow-up that starts before the idle window ends remains eligible while speech finishes or classification is queued. Classification still has a 10-second deadline, and dismissal or a replacement typed invitation invalidates older follow-up eligibility. A newly accepted invitation also opens the exchange for subsequent queued turns. Capturing speech-start state does not itself renew the window or permit background speech to act.
+
+An accepted new request may interrupt Elva's current reply. To cancel coding work, address her explicitly, for example “Elva, cancel the running Cursor task,” or make a clear cancellation request within the active exchange. Only an accepted coding-task cancellation aborts `coding_task`; quoted or background cancellation phrases do not. The server sends `session/cancel` to Cursor ACP or `turn/interrupt` to Codex app-server. A dismissed or superseded exchange cannot resume speaking merely because an older tool finishes.
+
+Attention checks add model usage and a response delay. They are semantic model decisions, not perfect speaker/addressee detection. Invalid, failed, expired, or stale decisions fail closed. The app disconnects if manual response control cannot be confirmed. Typed messages are explicit invitations and bypass the silent classifier.
+
+**Waiting for Elva does not mute the microphone:** audio still reaches the configured Realtime service for context and attention checks. Use **MUTE** or **DISCONNECT** to stop microphone transmission. This implementation uses the browser microphone only; Zoom/Teams call capture, speaker identification, and routing Elva's voice into a call are not implemented yet.
 
 ---
 
@@ -524,6 +530,18 @@ The quickest setup is to copy `.env.example` and then edit it.
 
 ## End-to-End Testing
 
+### Testing procedure and agent skill
+
+The layered workflow is documented in `docs/testing/diagnostics.md`. Invoke `$voice-pair-programmer-diagnostics` for missed follow-ups, early stopping, or weak search answers; the existing `$voice-pair-programmer-e2e` skill covers routine deterministic regressions.
+
+1. Reproduce the exact request and identify the failing boundary: audio admission, tool protocol, retrieval, parsing, or task completion.
+2. Add a focused failing regression, apply the fix, rerun that regression, then run `npm test` and `git diff --check`.
+3. With explicit live-service permission, compare Firecrawl's raw response with the app's tool output. Verify actual values, dates, and units rather than HTTP success or nonempty snippets.
+4. Run opt-in real-model checks separately. Synthetic forecast fixtures prove tool orchestration, not real retrieval or the model's choice to continue searching.
+5. Complete real-microphone acceptance separately and report which checks were real, simulated, passed, failed, or not run. Do not claim the default suite certifies real-call behavior.
+
+### Deterministic suite
+
 The Playwright suite launches the real Express/Vite application and a real Chromium browser. It remains deterministic by using a disposable Git repository under `.e2e/`, fake Cursor ACP and Codex app-server executables, a local Firecrawl stub, and browser-level microphone and WebRTC fakes. The default suite does not call live OpenAI, Cursor, Codex, or Firecrawl services.
 
 Install the pinned Chromium build once, then run the suite:
@@ -539,12 +557,18 @@ Additional commands:
 | --- | --- |
 | `npm test` | Run both typechecks, the production build, and the complete deterministic suite |
 | `npm run test:cursor` | Run Cursor-focused adapter and connected browser regression tests |
+| `npm run test:attention:live` | Opt-in synthetic-text attention evaluation through the running local app; uses real Realtime API credits, not included in `npm test` |
+| `npm run test:attention:live -- --tool-cycle` | Opt-in real Realtime tool-result and spoken-reply cycle using a harmless fixture tool; uses API credits |
 | `npm run test:e2e:headed` | Run with a visible Chromium window |
 | `npm run test:e2e:ui` | Open Playwright's interactive UI |
 | `npm run test:e2e:debug` | Start Playwright Inspector |
 | `npm run test:e2e:typecheck` | Type-check the Playwright configuration and tests |
 
-The suite covers application loading, disconnected text turns, microphone errors, the Realtime connection and one-time Elva greeting, provider selection, Cursor ACP sessions, Codex compatibility, approvals, cancellation, and every registered tool: `workspace_status`, `search_workspace`, `read_file`, `git_diff`, `run_tests`, `propose_patch`, `coding_task`, and `web_search`. It also tests the legacy `codex_task` server alias.
+The suite covers application loading, disconnected text turns, microphone errors, silent Realtime connection and attention gating, provider selection, Cursor ACP sessions, Codex compatibility, approvals, cancellation, and every registered tool: `workspace_status`, `search_workspace`, `read_file`, `git_diff`, `run_tests`, `propose_patch`, `coding_task`, and `web_search`. It also tests the legacy `codex_task` server alias.
+
+`e2e/attention.spec.ts` and `e2e/attention-controller.spec.ts` cover invitation/follow-up admission, inactivity, dismissal, session confirmation, malformed and late decisions, serialized checks, audio interruption, and authorization of tool response chains. The browser fake also checks conversation item/call IDs; continuations must wait for tool-result acknowledgement. These tests inject classifier decisions: they verify app behavior, not the model's ability to recognize an intended addressee.
+
+For a live semantic check, start `npm run dev`, then explicitly run `npm run test:attention:live`. It opens a separate headless browser with a silent synthetic microphone and sends 11 synthetic text scenarios to the configured Realtime model, with no executable tools. It does not record real microphone/call audio or run coding tasks. `ATTENTION_EVAL_BASE_URL` can select a different localhost app port. The result is a small text-only smoke evaluation, not an acoustic accuracy guarantee; see `docs/testing/conversation-attention.md` for real-audio acceptance checks.
 
 `e2e/cursor-browser.spec.ts` keeps the coding-agent HTTP endpoints real: browser text and simulated Realtime calls reach Express, the Cursor adapter, and the fake ACP executable. Approval and denial are checked against actual disposable file changes, and disconnect must remove pending approvals without editing files. Only external voice transport and font loading are stubbed in these journeys.
 
@@ -714,7 +738,7 @@ flowchart LR
 - When GPT-Realtime-2 determines that coding work is required, it emits a `coding_task` tool call. Express delegates the task to Cursor ACP by default or Codex app-server when `CODING_AGENT=codex`.
 - For quick repository questions it calls the local workspace tools instead. Those run in Express against the selected project and return in milliseconds, without a coding-agent turn. See [Realtime Tools](#realtime-tools).
 - When external or current information is required, it emits a `web_search` tool call instead. Express forwards it to `POST /v2/search` on the self-hosted Firecrawl instance and returns the top results with their sources. Web searches never go through the coding agent.
-- When the user begins speaking, only the audio response is stopped. An agent task receives Cursor `session/cancel` or Codex `turn/interrupt` only after an explicit instruction such as “stop” or “interrupt,” or when the connection is closed.
+- Incoming speech is checked silently before a reply or tool action is authorized. Only accepted requests can interrupt Elva's speech; only an accepted explicit coding cancellation sends Cursor `session/cancel` or Codex `turn/interrupt`. Disconnecting still cancels active tasks.
 - While connected, text-only messages use the GPT-Realtime-2 data channel. While disconnected, they use the generic coding-agent message route.
 - When no project is selected, the configured agent starts a session in a temporary directory. Implementation work is performed only against a selected project.
 
@@ -729,8 +753,8 @@ flowchart LR
 | `run_tests` by voice | **Immediately, without approval.** Runs `TEST_COMMAND` in the selected project, the same command as the `TESTS` button |
 | `propose_patch` by voice | Stages the diff in the patch panel. **Nothing is written until you press `APPLY`**, which then runs `git apply` in the selected project |
 | `web_search` through self-hosted Firecrawl | Runs immediately without approval. It is read-only and outbound, but note that Firecrawl sends requests from your machine to the target sites |
-| Voice interruption | Stops only the currently playing audio response; an active coding task continues |
-| Explicit coding-task interruption | Sends Cursor `session/cancel` or Codex `turn/interrupt` after phrases such as “stop,” “interrupt,” or “cancel,” or when disconnecting or switching projects |
+| Voice interruption | An accepted invitation/follow-up stops the current audio response; background speech does not, and coding work continues |
+| Explicit coding-task interruption | Sends Cursor `session/cancel` or Codex `turn/interrupt` after an accepted cancellation addressed to Elva, or when disconnecting or switching projects |
 | Coding-agent operations that request permission | Appear in the approval UI and receive `APPROVE`, `SESSION`, or `DECLINE`. **The requested operation does not run until `APPROVE` or `SESSION` is selected** |
 
 Because `run_tests` executes the configured test command and the Realtime model can call it, review the behavior of test suites that may have side effects, and set `TEST_COMMAND` accordingly.

@@ -3,7 +3,7 @@ import { cp, readFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { e2eRoot, e2eWorkspace } from "./support/paths";
-import { installRealtimeBrowserFakes } from "./support/realtime-browser";
+import { emitInvitedRealtimeReply, installRealtimeBrowserFakes } from "./support/realtime-browser";
 
 let workspace: string;
 let browserErrors: string[];
@@ -49,16 +49,10 @@ async function connectRealtime(page: Page) {
 }
 
 async function emitTask(page: Page, task: string) {
-  await page.evaluate((text) => {
-    const browser = window as unknown as {
-      __e2eRealtimeDataChannel: { onmessage: ((event: MessageEvent) => void) | null };
-    };
-    browser.__e2eRealtimeDataChannel.onmessage?.(new MessageEvent("message", { data: JSON.stringify({
-      type: "response.done", response: { status: "completed", output: [{
-        type: "function_call", name: "coding_task", call_id: "cursor-connected-call", arguments: JSON.stringify({ task: text })
-      }] }
-    }) }));
-  }, task);
+  await emitInvitedRealtimeReply(page, `Elva, ${task}`, [{
+    id: "cursor-connected-item", type: "function_call", name: "coding_task", call_id: "cursor-connected-call",
+    arguments: JSON.stringify({ task })
+  }]);
 }
 
 test("typed task reaches the real Cursor adapter and returns its response", async ({ page }) => {
@@ -126,4 +120,47 @@ test("Realtime disconnect cancels the backend approval without changing files", 
   }).toEqual([]);
   await expect(readFile(path.join(workspace, "agent-result.txt"))).rejects.toMatchObject({ code: "ENOENT" });
   await expect(page.locator("article.message.tool").first()).toContainText("interrupted");
+});
+
+test("Realtime background speech cannot cancel an approved Cursor task", async ({ page }) => {
+  await connectRealtime(page);
+  await emitTask(page, "e2e:edit");
+  await expect(page.getByRole("heading", { name: "Coding approval" })).toBeVisible();
+  await page.evaluate(() => {
+    const channel = (window as unknown as {
+      __e2eRealtimeDataChannel: { onmessage: ((event: MessageEvent) => void) | null };
+    }).__e2eRealtimeDataChannel;
+    for (const event of [
+      { type: "input_audio_buffer.speech_started" },
+      { type: "conversation.item.input_audio_transcription.completed", transcript: "stop cursor" }
+    ]) channel.onmessage?.(new MessageEvent("message", { data: JSON.stringify(event) }));
+  });
+  await expect(page.getByRole("heading", { name: "Coding approval" })).toBeVisible();
+  await page.getByRole("button", { name: "Approve", exact: true }).click();
+  await expect(page.locator("article.message.tool").first()).toContainText("finished");
+  expect(await readFile(path.join(workspace, "agent-result.txt"), "utf8")).toBe("implemented by cursor\n");
+});
+
+test("Realtime accepted spoken cancellation stops Cursor without applying files", async ({ page, request }) => {
+  await connectRealtime(page);
+  await emitTask(page, "e2e:edit");
+  await expect(page.getByRole("heading", { name: "Coding approval" })).toBeVisible();
+  await page.evaluate(() => {
+    const browser = window as unknown as {
+      __e2eRealtimeEvents: { response?: { metadata?: Record<string, string> } }[];
+      __e2eRealtimeDataChannel: { onmessage: ((event: MessageEvent) => void) | null };
+    };
+    const emit = (event: unknown) => browser.__e2eRealtimeDataChannel.onmessage?.(
+      new MessageEvent("message", { data: JSON.stringify(event) })
+    );
+    emit({ type: "input_audio_buffer.committed", item_id: "Elva-cancel-cursor" });
+    const check = browser.__e2eRealtimeEvents.filter((event) => event.response?.metadata?.attention_check).at(-1)!;
+    emit({ type: "response.done", response: {
+      id: "accepted-cancellation", status: "completed", metadata: check.response!.metadata,
+      output: [{ type: "function_call", name: "attention_decision", arguments: '{"action":"follow_up","cancel_task":true}' }]
+    } });
+  });
+  await expect.poll(async () => (await (await request.get("/api/coding-agent/approvals")).json()).approvals).toEqual([]);
+  await expect(page.locator("article.message.tool").first()).toContainText("interrupted");
+  await expect(readFile(path.join(workspace, "agent-result.txt"))).rejects.toMatchObject({ code: "ENOENT" });
 });

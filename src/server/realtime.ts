@@ -198,8 +198,8 @@ export function buildSessionConfig(
         turn_detection: {
           type: "semantic_vad",
           eagerness: "medium",
-          create_response: true,
-          interrupt_response: true
+          create_response: false,
+          interrupt_response: false
         }
       },
       output: {

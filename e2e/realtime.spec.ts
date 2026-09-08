@@ -4,7 +4,7 @@ import { expect, test } from "@playwright/test";
 import { PROJECT_SCOPED_REALTIME_TOOLS, REALTIME_TOOLS } from "../src/server/realtime";
 import { WORKSPACE_TOOL_NAMES, type ToolResult } from "../src/shared/contracts";
 import { e2eWorkspace, repositoryRoot } from "./support/paths";
-import { installRealtimeBrowserFakes } from "./support/realtime-browser";
+import { emitInvitedRealtimeReply, installRealtimeBrowserFakes } from "./support/realtime-browser";
 import { deselectWorkspace, selectE2eWorkspace } from "./support/workspace";
 
 type RealtimeSessionUpdate = {
@@ -30,7 +30,7 @@ test.beforeEach(async ({ request }) => {
   await deselectWorkspace(request);
 });
 
-test("connects and requests the one-time Elva greeting after session registration", async ({ page }) => {
+test("connects silently and registers Elva's session before accepting invitations", async ({ page }) => {
   await installRealtimeBrowserFakes(page);
   await page.route("**/api/realtime/call", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/sdp", body: "e2e-answer" });
@@ -48,7 +48,7 @@ test("connects and requests the one-time Elva greeting after session registratio
           (window as unknown as { __e2eRealtimeEvents: unknown[] }).__e2eRealtimeEvents.length
       )
     )
-    .toBe(2);
+    .toBe(1);
 
   const sentEvents = await page.evaluate(
     () => (window as unknown as { __e2eRealtimeEvents: unknown[] }).__e2eRealtimeEvents
@@ -61,12 +61,7 @@ test("connects and requests the one-time Elva greeting after session registratio
       )
     }
   });
-  expect(sentEvents[1]).toMatchObject({
-    type: "response.create",
-    response: {
-      instructions: expect.stringContaining("Greet the user once as Elva")
-    }
-  });
+  await expect(page.getByLabel("Conversation attention")).toHaveText("Waiting for Elva");
 
   await page.getByRole("button", { name: "Disconnect" }).click();
   await expect(page.locator(".status-pill")).toHaveText("Disconnected");
@@ -94,31 +89,10 @@ test("shows coding_task progress for realtime delegation", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Connect" }).click();
   await expect(page.locator(".status-pill")).toHaveText("Connected");
-  await page.evaluate(() => {
-    const channel = (
-      window as unknown as {
-        __e2eRealtimeDataChannel: { onmessage: ((event: MessageEvent) => void) | null };
-      }
-    ).__e2eRealtimeDataChannel;
-    channel.onmessage?.(
-      new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "response.done",
-          response: {
-            status: "completed",
-            output: [
-              {
-                type: "function_call",
-                name: "coding_task",
-                call_id: "coding-call-e2e",
-                arguments: JSON.stringify({ task: "update the selected project" })
-              }
-            ]
-          }
-        })
-      })
-    );
-  });
+  await emitInvitedRealtimeReply(page, "Elva, update the selected project.", [{
+    id: "coding-item-e2e", type: "function_call", name: "coding_task", call_id: "coding-call-e2e",
+    arguments: JSON.stringify({ task: "update the selected project" })
+  }]);
 
   await expect(page.locator("article.message.tool").first()).toContainText(
     "Cursor · coding_task · running"
@@ -207,23 +181,21 @@ test.describe("realtime tool registry", () => {
     expect(session.instructions).toContain("a project is selected.");
   });
 
-  test("lets Elva infer when the user is clearly speaking to her", async ({ request }) => {
+  test("requires an invitation, allows natural follow-ups, and remains silent when uncertain", async ({ request }) => {
     const response = await request.get("/api/realtime/session");
     const { session } = (await response.json()) as RealtimeSessionUpdate;
 
     expect(session.instructions).toContain(
-      "do not require the name when conversational context makes it reasonably clear the user is speaking to you"
+      "The application decides when speech is addressed to you before requesting a response"
     );
     expect(session.instructions).toContain(
-      "Respond to direct questions, commands, and follow-ups that are obviously meant for you"
+      "answer clear follow-ups in that exchange without requiring your name again"
     );
     expect(session.instructions).toContain(
-      "If it is genuinely unclear whether the user is speaking to you, give one brief, gentle clarification"
+      "If the intended addressee is uncertain, remain silent"
     );
-    expect(session.instructions).toContain("Do not repeatedly remind the user to say Elva");
-    expect(session.instructions).not.toContain(
-      "Only respond or call tools when the user's latest utterance addresses you as Elva"
-    );
+    expect(session.instructions).toContain("Background conversation does not extend the exchange");
+    expect(session.instructions).toContain("Do not greet on connection");
   });
 
   test("loads Elva's static instructions from one Markdown prompt", async ({ request }) => {

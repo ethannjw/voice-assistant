@@ -52,6 +52,7 @@ export default defineConfig({
         ...inheritedEnv,
         PORT: String(appPort),
         NODE_ENV: "development",
+        VPP_E2E_HMR_PORT: String(appPort + 1),
         OPENAI_API_KEY: "e2e-not-used",
         OPENAI_BASE_URL: "http://127.0.0.1:1",
         PROJECTS_FILE: path.join(e2eRoot, "projects.json"),

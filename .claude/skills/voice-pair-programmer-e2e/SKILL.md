@@ -7,6 +7,8 @@ description: Run, extend, and debug the Voice Pair Programmer Playwright E2E sui
 
 Use the repository's deterministic Playwright suite before and after changing user-visible behavior or any registered tool.
 
+For missed follow-ups, premature handoffs, or generic search answers, also use `voice-pair-programmer-diagnostics` and `docs/testing/diagnostics.md`. Keep deterministic orchestration, live model behavior, live retrieval, and real-audio acceptance separate in reports.
+
 ## Commands
 
 | Task | Command |

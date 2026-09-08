@@ -130,6 +130,7 @@ export function App() {
       <section className="workspace-panel">
         <Topbar
           status={realtime.status}
+          attentionState={realtime.attentionState}
           codingAgent={projects.config?.codingAgent ?? null}
           codingModel={projects.config?.codingModel ?? null}
         />

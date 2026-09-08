@@ -15,6 +15,7 @@ type Options = {
   codingAgentRef: RefCell<CodingAgentName | null>;
   dataChannelRef: RefCell<RTCDataChannel | null>;
   conversationRevisionRef: RefCell<number>;
+  onRealtimeResult: (channel: RTCDataChannel, callId: string, result: ToolResult, interrupted: boolean) => void;
 };
 
 function parseToolArguments(rawArgs: string): Record<string, unknown> {
@@ -31,7 +32,8 @@ export function useCodexToolExecution({
   onPendingPatch,
   codingAgentRef,
   dataChannelRef,
-  conversationRevisionRef
+  conversationRevisionRef,
+  onRealtimeResult
 }: Options) {
   const toolAbortControllersRef = useRef<Set<AbortController>>(new Set());
   const toolAbortReasonsRef = useRef<Map<AbortController, string>>(new Map());
@@ -151,19 +153,7 @@ export function useCodexToolExecution({
         originChannel.readyState === "open"
       ) {
         try {
-          originChannel.send(
-            JSON.stringify({
-              type: "conversation.item.create",
-              item: {
-                type: "function_call_output",
-                call_id: callId,
-                output: JSON.stringify(result)
-              }
-            })
-          );
-          if (!interrupted && originChannel.readyState === "open") {
-            originChannel.send(JSON.stringify({ type: "response.create" }));
-          }
+          onRealtimeResult(originChannel, callId, result, interrupted);
         } catch (error) {
           addLog(
             "system",
@@ -174,7 +164,7 @@ export function useCodexToolExecution({
         }
       }
     },
-    [addLog, codingAgentRef, conversationRevisionRef, dataChannelRef, onPendingPatch, updateLog]
+    [addLog, codingAgentRef, conversationRevisionRef, dataChannelRef, onPendingPatch, onRealtimeResult, updateLog]
   );
 
   return {

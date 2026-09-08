@@ -1,15 +1,16 @@
 import { STATUS_LABELS } from "../constants";
 import { formatCodingAgentName } from "../lib/format";
 import type { CodingAgentName } from "../../shared/contracts";
-import type { ConnectionStatus } from "../types";
+import type { AttentionState, ConnectionStatus } from "../types";
 
 type Props = {
   status: ConnectionStatus;
+  attentionState: AttentionState;
   codingAgent: CodingAgentName | null;
   codingModel: string | null;
 };
 
-export function Topbar({ status, codingAgent, codingModel }: Props) {
+export function Topbar({ status, attentionState, codingAgent, codingModel }: Props) {
   const codingAgentName = formatCodingAgentName(codingAgent);
 
   return (
@@ -19,6 +20,12 @@ export function Topbar({ status, codingAgent, codingModel }: Props) {
         <h1>Voice Pair Programmer</h1>
       </div>
       <div className="topbar-statuses">
+        {status === "connected" && (
+          <span className="agent-pill" role="status" aria-label="Conversation attention"
+            title="Address Elva to begin. Clear follow-ups work without her name for 30 seconds after an exchange.">
+            {attentionState === "engaged" ? "In conversation" : "Waiting for Elva"}
+          </span>
+        )}
         <span
           className={`agent-pill ${codingAgent ?? "loading"}`}
           aria-label={`Coding harness: ${codingAgentName}`}
