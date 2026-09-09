@@ -559,6 +559,10 @@ Additional commands:
 | `npm run test:cursor` | Run Cursor-focused adapter and connected browser regression tests |
 | `npm run test:attention:live` | Opt-in synthetic-text attention evaluation through the running local app; uses real Realtime API credits, not included in `npm test` |
 | `npm run test:attention:live -- --tool-cycle` | Opt-in real Realtime tool-result and spoken-reply cycle using a harmless fixture tool; uses API credits |
+| `npm run test:search:live` | Opt-in real-model search refinement check with controlled Firecrawl fixtures and the production parser/prompt; uses API credits |
+| `npm run test:search:live -- --case content` | Check that sufficient scraped values produce an answer without unnecessary extra searches |
+| `npm run test:search:live -- --case unavailable` | Check the three-search limit and an honest answer when all pages are unavailable |
+| `npm run test:search:live -- --live-search` | Opt-in real Firecrawl + app + Realtime smoke check; sends a public weather query and uses API credits |
 | `npm run test:e2e:headed` | Run with a visible Chromium window |
 | `npm run test:e2e:ui` | Open Playwright's interactive UI |
 | `npm run test:e2e:debug` | Start Playwright Inspector |
@@ -567,6 +571,10 @@ Additional commands:
 The suite covers application loading, disconnected text turns, microphone errors, silent Realtime connection and attention gating, provider selection, Cursor ACP sessions, Codex compatibility, approvals, cancellation, and every registered tool: `workspace_status`, `search_workspace`, `read_file`, `git_diff`, `run_tests`, `propose_patch`, `coding_task`, and `web_search`. It also tests the legacy `codex_task` server alias.
 
 `e2e/attention.spec.ts` and `e2e/attention-controller.spec.ts` cover invitation/follow-up admission, inactivity, dismissal, session confirmation, malformed and late decisions, serialized checks, audio interruption, and authorization of tool response chains. The browser fake also checks conversation item/call IDs; continuations must wait for tool-result acknowledgement. These tests inject classifier decisions: they verify app behavior, not the model's ability to recognize an intended addressee.
+
+`e2e/web-search.spec.ts` checks that values found only in page Markdown reach the answer context, including partial failures, metadata-only URLs, long-page excerpts, empty/error responses, output limits, and request cancellation/deadlines. A connected browser test keeps the real search route and parser, verifies the delivered values, and requires automatic continuation after the tool-result acknowledgement. The controller enforces at most three web searches per accepted request, including parallel calls; a new accepted request gets a fresh budget.
+
+For live completion-policy checks, run the three `test:search:live` fixture modes separately. Each uses a fresh Realtime session, the app's production instructions and tool schema, the real search parser and attention controller, and controlled Firecrawl responses. It does not force the model's tool choice or provide the final answer in its instructions. Default mode requires automatic refinement after insufficient snippets; `--case content` requires an answer from the first useful page; `--case unavailable` requires a bounded, honest failure. Only `--live-search` also calls the app's real Firecrawl route. Live checks are opt-in and not part of `npm test`.
 
 For a live semantic check, start `npm run dev`, then explicitly run `npm run test:attention:live`. It opens a separate headless browser with a silent synthetic microphone and sends 11 synthetic text scenarios to the configured Realtime model, with no executable tools. It does not record real microphone/call audio or run coding tasks. `ATTENTION_EVAL_BASE_URL` can select a different localhost app port. The result is a small text-only smoke evaluation, not an acoustic accuracy guarantee; see `docs/testing/conversation-attention.md` for real-audio acceptance checks.
 
@@ -737,7 +745,7 @@ flowchart LR
 - Audio and Realtime events flow between the **browser and GPT-Realtime-2**.
 - When GPT-Realtime-2 determines that coding work is required, it emits a `coding_task` tool call. Express delegates the task to Cursor ACP by default or Codex app-server when `CODING_AGENT=codex`.
 - For quick repository questions it calls the local workspace tools instead. Those run in Express against the selected project and return in milliseconds, without a coding-agent turn. See [Realtime Tools](#realtime-tools).
-- When external or current information is required, it emits a `web_search` tool call instead. Express forwards it to `POST /v2/search` on the self-hosted Firecrawl instance and returns the top results with their sources. Web searches never go through the coding agent.
+- When external or current information is required, it emits a `web_search` tool call instead. Express calls Firecrawl `POST /v2/search` with fresh Markdown extraction, returning up to five sources with page content, retrieval timestamps, scrape status, and snippet-only/truncation labels. Page content is bounded to 12,000 characters per source; long pages retain the beginning plus query-matched excerpts rather than only navigation. Requests have a 50-second deadline and preserve disconnect cancellation. Elva automatically refines insufficient results within a three-search budget, then answers with supported values, units, dates, and source names or identifies the specific unavailable facts. Web searches never go through the coding agent.
 - Incoming speech is checked silently before a reply or tool action is authorized. Only accepted requests can interrupt Elva's speech; only an accepted explicit coding cancellation sends Cursor `session/cancel` or Codex `turn/interrupt`. Disconnecting still cancels active tasks.
 - While connected, text-only messages use the GPT-Realtime-2 data channel. While disconnected, they use the generic coding-agent message route.
 - When no project is selected, the configured agent starts a session in a temporary directory. Implementation work is performed only against a selected project.

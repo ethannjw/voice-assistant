@@ -116,6 +116,9 @@ test.describe.serial("registered tools", () => {
     const result = await callTool(request, "web_search", { query: "playwright tool query" });
     expect(result.ok).toBe(true);
     expect(result.output).toContain("Stub result for playwright tool query");
+    expect(result.output).toContain("high 31°C, low 24°C");
+    expect(result.output).toContain("September 9, 2026");
+    expect(result.output).toContain("https://example.test/firecrawl-result");
     expect(result.metadata).toMatchObject({ provider: "firecrawl" });
   });
 });

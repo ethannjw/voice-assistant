@@ -88,6 +88,22 @@ test("attention search result completes a persisted tool cycle without missing-c
   await expect(page.locator("article.message.system").filter({ hasText: /not found in conversation|does not exist|rejected the tool result/ })).toHaveCount(0);
 });
 
+test("attention delivers scraped values through the real search route and continues without a second invitation", async ({ page }) => {
+  await connect(page);
+  await emitInvitedRealtimeReply(page, "Elva, find the Glass Harbor forecast.", [{
+    id: "scraped-search-item", type: "function_call", name: "web_search", call_id: "scraped-search", arguments: '{"query":"Glass Harbor high low forecast"}'
+  }]);
+  await expect(page.locator("article.message.tool").filter({ hasText: "Page content" })).toContainText("high 31°C, low 24°C");
+  await expect.poll(() => replyCount(page)).toBe(2);
+  const outputs = await page.evaluate(() => (window as unknown as {
+    __e2eRealtimeEvents: { item?: { type?: string; call_id?: string; output?: string } }[];
+  }).__e2eRealtimeEvents.filter((event) => event.item?.call_id === "scraped-search" && event.item.type === "function_call_output"));
+  expect(outputs).toHaveLength(1);
+  const result = JSON.parse(outputs[0].item!.output!);
+  expect(result.output).toContain("high 31°C, low 24°C");
+  expect(result.metadata.sources[0]).toMatchObject({ contentStatus: "scraped", url: "https://example.test/firecrawl-result" });
+});
+
 test("attention checks committed audio without speech or workspace tools", async ({ page }) => {
   await connect(page);
   await emit(page, { type: "input_audio_buffer.committed", item_id: "audio-background" });

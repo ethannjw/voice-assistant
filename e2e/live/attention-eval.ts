@@ -1,6 +1,7 @@
 import { chromium, type Page } from "@playwright/test";
 import { ATTENTION_IDLE_MS, ConversationAttention } from "../../src/client/lib/conversationAttention";
 import type { RealtimeEvent } from "../../src/client/types";
+import { evaluateSearchPolicy } from "./search-policy";
 
 type EvaluationWindow = Window & {
   __attentionEval: { channel: RTCDataChannel | null; events: RealtimeEvent[] };
@@ -135,11 +136,12 @@ async function evaluateToolCycle(page: Page) {
 
 async function main() {
   const toolCycle = process.argv.includes("--tool-cycle");
+  const searchPolicy = process.argv.includes("--search-policy");
   const caseFlag = process.argv.indexOf("--case");
-  const selectedCases = toolCycle ? [] : caseFlag < 0 ? cases : cases.filter((example) =>
+  const selectedCases = toolCycle || searchPolicy ? [] : caseFlag < 0 ? cases : cases.filter((example) =>
     new RegExp(process.argv[caseFlag + 1] ?? "", "i").test(example.name)
   );
-  if (!toolCycle && selectedCases.length === 0) throw new Error("No evaluation cases matched --case.");
+  if (!toolCycle && !searchPolicy && selectedCases.length === 0) throw new Error("No evaluation cases matched --case.");
   const baseUrl = process.env.ATTENTION_EVAL_BASE_URL ?? "http://127.0.0.1:8787";
   const target = new URL(baseUrl);
   if (!["localhost", "127.0.0.1", "[::1]"].includes(target.hostname)) {
@@ -194,6 +196,7 @@ async function main() {
     }
 
     if (toolCycle) await evaluateToolCycle(page);
+    if (searchPolicy) await evaluateSearchPolicy(page, process.argv.includes("--live-search"));
     for (const example of selectedCases) {
       const requests: Record<string, unknown>[] = [];
       let cancellations = 0;
@@ -250,7 +253,7 @@ async function main() {
         controller.dispose();
       }
     }
-    if (!toolCycle) console.log(`${selectedCases.length - failed}/${selectedCases.length} synthetic text cases passed. This does not measure real microphone/acoustic accuracy.`);
+    if (!toolCycle && !searchPolicy) console.log(`${selectedCases.length - failed}/${selectedCases.length} synthetic text cases passed. This does not measure real microphone/acoustic accuracy.`);
     process.exitCode = failed ? 1 : 0;
   } finally {
     await browser.close();

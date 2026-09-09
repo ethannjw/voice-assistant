@@ -21,6 +21,7 @@ Write a focused regression that fails for the observed behavior, verify the fail
 
 ```bash
 npm run test:e2e -- e2e/tools.spec.ts
+npm run test:e2e -- e2e/web-search.spec.ts
 npm run test:e2e -- e2e/attention.spec.ts e2e/attention-controller.spec.ts
 npm run test:cursor
 npm test
@@ -71,6 +72,21 @@ npm run test:attention:live -- --tool-cycle
 These commands use real Realtime API credits and a silent synthetic microphone. The first checks text-based attention decisions; the second checks actual conversation storage, tool-result acceptance, spoken fixture output, and nameless follow-ups. The clock-boundary case is simulated. Neither command tests live web retrieval or acoustic wake-word recognition.
 
 For a search-policy change, also evaluate the production prompt against insufficient tool results, without forcing a second tool call or scripting the final answer. Require an automatic bounded refinement, an answer grounded in the supplied values, and no request to say “continue.” Test unavailable data separately: Elva should stop honestly rather than loop or invent a forecast.
+
+The implemented search-policy checks are:
+
+```bash
+npm run test:search:live
+npm run test:search:live -- --case content
+npm run test:search:live -- --case unavailable
+npm run test:search:live -- --live-search
+```
+
+Run these sequentially. Each invocation opens a fresh session to prevent earlier fixture answers leaking into the unavailable-data case. The first three use a local ephemeral Firecrawl fixture server but the production `runWebSearch` parser, tool schema, instructions, and attention controller. Only `web_search` is exposed; coding tasks cannot execute. Tool selection remains automatic, and no final answer is inserted into the instructions. Default mode returns generic snippets first and page-only values after a distinct refinement. Content mode requires one lookup; unavailable mode requires three bounded attempts and a specific limitation without fabricated temperatures.
+
+The final mode instead executes the app's real `/api/tools/web_search` route against its configured Firecrawl. It checks that scraped content reaches the model and that the final reply includes high/low values and Celsius units. This is a live smoke check, not an independent meteorological truth oracle: inspect source/date/unit alignment and provider differences separately. A provider outage should fail this check, not be silently converted to a passing fixture result.
+
+The app now requests fresh Markdown and includes per-source `contentStatus`, `statusCode` when available, `truncated`, and a retrieval timestamp. Query-matched excerpts limit large pages to 12,000 characters per source. Snippet-only or failed pages remain explicitly labeled so the model can refine rather than confuse a successful search with an answered question. The controller, not just the prompt, limits web searches to three per accepted request.
 
 ## 5. Real-audio acceptance and handoff
 

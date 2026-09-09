@@ -119,7 +119,7 @@ export const REALTIME_TOOLS = [
     type: "function",
     name: "web_search",
     description:
-      "Search the public web through Firecrawl for current or external information. Use this directly for recent facts, news, documentation, prices, schedules, and other information that may have changed.",
+      "Search the public web through Firecrawl and retrieve fresh page content, not just snippets. Use this directly for current or external facts. If requested values are missing or a page fails, refine the query or target another source automatically, without asking permission for the same lookup. At most three searches per accepted request; answer from source content with dates and units, or state the specific missing facts.",
     parameters: {
       type: "object",
       properties: {

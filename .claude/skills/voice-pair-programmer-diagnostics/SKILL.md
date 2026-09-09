@@ -22,6 +22,7 @@ Follow the layered procedure in `docs/testing/diagnostics.md`. Use `docs/testing
 - After permission for live services, compare the exact query through local Firecrawl and the app. Change one retrieval option at a time. Use public, non-sensitive queries and inspect source/date/unit evidence without dumping secrets or entire pages.
 - Run `npm run test:attention:live` and `npm run test:attention:live -- --tool-cycle` when changing attention/protocol behavior. They use real API credits but synthetic inputs. They do not test real Firecrawl or acoustic recognition.
 - Evaluate changed conversational policy against the configured live model without forcing the desired tool choice or replacing the production prompt. Use bounded fixture tools for reproducibility, followed by a separate real-retrieval smoke check.
+- Search-policy commands: `npm run test:search:live` for automatic refinement, `-- --case content` for first-page sufficiency, and `-- --case unavailable` for bounded failure. `-- --live-search` also calls the real app/Firecrawl route. Run each separately for a fresh conversation; inspect live source/date/unit alignment manually rather than treating the smoke check as a forecast truth oracle.
 
 ## Report evidence honestly
 

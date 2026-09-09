@@ -15,7 +15,10 @@ const server = createServer(async (request, response) => {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
 
-    const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { query?: string };
+    const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+      query?: string;
+      scrapeOptions?: { formats?: string[] };
+    };
     const query = payload.query?.trim() || "missing query";
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(
@@ -26,7 +29,11 @@ const server = createServer(async (request, response) => {
             {
               title: "E2E Firecrawl Result",
               url: "https://example.test/firecrawl-result",
-              description: `Stub result for ${query}`
+              description: `Stub result for ${query}`,
+              ...(payload.scrapeOptions?.formats?.includes("markdown") ? {
+                markdown: "# Synthetic forecast\n\nSeptember 9, 2026. Glass Harbor high 31°C, low 24°C.",
+                metadata: { statusCode: 200 }
+              } : {})
             }
           ]
         }

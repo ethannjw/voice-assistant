@@ -57,7 +57,7 @@ export function mountToolRoutes(
         res.json({
           ok: true,
           output: formatWebSearchOutput(result),
-          metadata: { provider: "firecrawl", sources: result.sources }
+          metadata: { provider: "firecrawl", sources: result.sources, retrievedAt: result.retrievedAt }
         });
       } catch (error) {
         if (abortController.signal.aborted || res.writableEnded) return;

@@ -115,6 +115,43 @@ test("attention does not reference or continue a tool result until the server ac
   expect(harness.checks().at(-1)?.response?.input?.map((item) => item.id)).toEqual(expect.arrayContaining(["lookup-item", output.item!.id]));
 });
 
+test("attention limits web searches per invitation even when too many are emitted together", () => {
+  const harness = setup();
+  harness.controller.handleEvent({ type: "session.updated", session: {
+    tools: [{ name: "web_search" }, { name: "coding_task" }],
+    audio: { input: { turn_detection: { create_response: false, interrupt_response: false } } }
+  } });
+  harness.invite();
+  harness.done(harness.replies()[0], ["search-1", "search-2", "search-3", "search-4"].map((callId) => ({
+    id: `${callId}-item`, type: "function_call", name: "web_search", call_id: callId
+  })));
+  expect(harness.tools).toEqual(["search-1", "search-2", "search-3"]);
+  expect(harness.events.find((event) => event.item?.call_id === "search-4")?.item).toMatchObject({ type: "function_call_output" });
+  for (const callId of ["search-1", "search-2", "search-3"]) {
+    harness.controller.finishToolCall(callId, { ok: true, output: "No page data available." }, false);
+    harness.acknowledge(callId);
+  }
+  expect(harness.replies()).toHaveLength(1);
+  harness.acknowledge("search-4");
+  expect(harness.replies()).toHaveLength(2);
+  expect(harness.replies().at(-1)?.response?.tools).toEqual([{ name: "coding_task" }]);
+  harness.controller.sendText("Elva, look up a different question.");
+  expect(harness.replies().at(-1)?.response?.tools).toBeUndefined();
+});
+
+test("attention search refinements continue after each acknowledgement without another invitation", () => {
+  const harness = setup();
+  harness.invite();
+  for (const callId of ["first-lookup", "refined-lookup"]) {
+    harness.done(harness.replies().at(-1)!, [{ id: `${callId}-item`, type: "function_call", name: "web_search", call_id: callId }]);
+    harness.controller.finishToolCall(callId, { ok: true, output: callId === "first-lookup" ? "Snippet only" : "High 31°C, low 24°C" }, false);
+    harness.acknowledge(callId);
+  }
+  expect(harness.replies()).toHaveLength(3);
+  expect(harness.tools).toEqual(["first-lookup", "refined-lookup"]);
+  expect(harness.events.filter((event) => event.item?.role === "user")).toHaveLength(1);
+});
+
 test("attention rejected tool outputs cannot poison later checks or resume a reply", () => {
   const harness = setup();
   harness.invite();
