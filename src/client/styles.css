@@ -66,6 +66,41 @@
   box-sizing: border-box;
 }
 
+.mcp-panel {
+  border: 1px solid var(--line-bright);
+  border-radius: 10px;
+  padding: 16px;
+  background: var(--bg-panel);
+}
+.mcp-heading, .mcp-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.mcp-heading { justify-content: space-between; }
+.mcp-heading h2 { display: flex; align-items: center; gap: 8px; }
+.mcp-heading h2, .mcp-heading h3 { margin: 0; }
+.mcp-actions label { display: inline-flex; align-items: center; gap: 7px; }
+.mcp-actions input[type="checkbox"] { width: 16px; height: 16px; min-height: 0; margin: 0; accent-color: var(--cyan); }
+.mcp-hint { color: var(--ink-faint); font-size: 12px; line-height: 1.6; }
+.mcp-settings, .mcp-server-list { display: grid; gap: 14px; }
+.mcp-server, .mcp-request { border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
+.mcp-request { border-color: var(--amber); margin: 12px 0; }
+.mcp-state { font-size: 12px; color: var(--ink-faint); }
+.mcp-state-connected, .mcp-notice { color: var(--green); }
+.mcp-state-error, .mcp-state-auth_required { color: var(--amber); }
+.mcp-panel textarea { width: 100%; padding: 10px; resize: vertical; font: 12px/1.6 var(--mono); color: var(--ink); background: var(--bg-recess); border: 1px solid var(--line-bright); border-radius: 6px; }
+.mcp-panel select { color: var(--ink); background: var(--bg-recess); padding: 6px; }
+.mcp-output { max-height: 350px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.5; }
+.mcp-panel summary { cursor: pointer; color: var(--cyan); }
+.mcp-panel a { color: var(--cyan); overflow-wrap: anywhere; }
+.mcp-auth-link { display: inline-block; margin-top: 12px; }
+.mcp-events { padding-left: 18px; font-size: 12px; line-height: 1.7; }
+.mcp-import { font-size: 12px; }
+.mcp-import input { display: block; max-width: 240px; margin-top: 6px; }
+.mcp-editor-label { font-size: 13px; color: var(--ink-dim); }
+
 *::selection {
   background: var(--cyan);
   color: #001018;

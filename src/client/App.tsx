@@ -8,6 +8,7 @@ import { PromptRow } from "./components/PromptRow";
 import { ToastStack } from "./components/ToastStack";
 import { Topbar } from "./components/Topbar";
 import { VoicePanel } from "./components/VoicePanel";
+import { McpPanel } from "./components/McpPanel";
 import { useCodexApprovals } from "./hooks/useCodexApprovals";
 import { useConfirmDialog } from "./hooks/useConfirmDialog";
 import { useConversationLogs } from "./hooks/useConversationLogs";
@@ -159,6 +160,7 @@ export function App() {
           onRunTests={() => void realtime.executeToolCall("run_tests", null, "{}")}
         />
 
+        <McpPanel />
         <VoicePanel voiceStyle={voiceStyle} onChange={setVoiceStyle} />
 
         <PromptRow

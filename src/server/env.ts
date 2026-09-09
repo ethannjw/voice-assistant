@@ -25,6 +25,7 @@ if (process.env.CODEX_PROFILE?.trim()) {
 }
 
 export const env = {
+  mcpConfigPath: path.resolve(process.env.MCP_CONFIG_FILE ?? path.join(process.cwd(), ".voice-pair-programmer", "mcp.json")),
   port: Number(process.env.PORT ?? 8787),
   defaultWorkspaceRoot: path.resolve(process.env.WORKSPACE_ROOT ?? process.cwd()),
   projectStorePath: path.resolve(

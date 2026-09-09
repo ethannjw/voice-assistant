@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.4.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@vitejs/plugin-react": "^5.0.0",
     "dotenv": "^16.4.7",
     "express": "^5.1.0",

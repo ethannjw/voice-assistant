@@ -8,6 +8,8 @@ import { env } from "./env";
 import { ProjectStore } from "./projectStore";
 import { mountRoutes } from "./routes";
 import { WorkspaceTools } from "./tools";
+import { McpManager } from "./mcp/manager";
+import { McpConfigStore } from "./mcp/config";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,6 +20,8 @@ const app = express();
 
 const projectStore = new ProjectStore(env.projectStorePath, env.defaultWorkspaceRoot);
 await projectStore.load();
+const mcp = new McpManager(new McpConfigStore(env.mcpConfigPath), `http://localhost:${env.port}/api/mcp/oauth/callback`, () => projectStore.getActiveProject());
+await mcp.load();
 const tools = new WorkspaceTools(projectStore.getActiveProject()?.path ?? null);
 const codingAgent = createCodingAgent({
   provider: env.codingAgent,
@@ -39,6 +43,7 @@ app.use(express.json({ limit: "1mb" }));
 // ---------- API routes ----------
 
 mountRoutes(app, {
+  mcp,
   projectStore,
   tools,
   codingAgent,
@@ -67,7 +72,7 @@ if (env.isProduction) {
 
 // ---------- Start ----------
 
-app.listen(env.port, () => {
+const server = app.listen(env.port, () => {
   console.log(`Voice Pair Programmer server listening on http://localhost:${env.port}`);
   console.log(`Workspace root: ${tools.getWorkspaceRoot() ?? "(none selected)"}`);
   console.log(`Realtime model: ${env.realtimeModel}`);
@@ -83,3 +88,14 @@ app.listen(env.port, () => {
     console.log(`Codex model provider: ${env.codexModelProvider ?? "(default from config.toml)"}`);
   }
 });
+
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  server.close();
+  await Promise.allSettled([mcp.dispose(), codingAgent.dispose()]);
+  process.exit(0);
+}
+process.once("SIGINT", () => { void shutdown(); });
+process.once("SIGTERM", () => { void shutdown(); });

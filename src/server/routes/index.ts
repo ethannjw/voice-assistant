@@ -9,8 +9,11 @@ import { mountRealtimeRoutes } from "./realtime";
 import { mountCodexRoutes } from "./codex";
 import { mountToolRoutes } from "./tools";
 import { mountPatchRoutes } from "./patch";
+import { mountMcpRoutes } from "./mcp";
+import type { McpManager } from "../mcp/manager";
 
 export type RouteDeps = {
+  mcp: McpManager;
   projectStore: ProjectStore;
   tools: WorkspaceTools;
   codingAgent: CodingAgent;
@@ -22,6 +25,7 @@ export type RouteDeps = {
 };
 
 export function mountRoutes(app: Express, deps: RouteDeps) {
+  mountMcpRoutes(app, deps.mcp);
   mountConfigRoutes(app, deps);
   mountProjectRoutes(app, deps);
   mountRealtimeRoutes(app, deps);

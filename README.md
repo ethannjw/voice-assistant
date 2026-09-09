@@ -71,6 +71,12 @@ The same local tools are registered with the Realtime model, so you can also ask
 
 ## Realtime Tools
 
+### User-configurable MCP servers
+
+Open **Manage MCP servers** to import or edit standard `mcpServers` JSON. Elva supports local stdio, remote Streamable HTTP, legacy SSE, OAuth, tool discovery/execution, resources, prompts, and user-controlled permissions. No service-specific adapter is required. See [MCP configuration and protocol support](docs/mcp.md) for setup, security boundaries, and the exact supported capabilities.
+
+`mcp_list` and `mcp_call` work without selecting a repository. Full access is the default for configured servers; use server/tool policies to ask or deny. GitHub command tooling is separate.
+
 Every tool the application implements is registered with the Realtime session, so Elva can answer directly instead of routing every request through the coding agent. The registry lives in `REALTIME_TOOLS` in `src/server/realtime.ts` and is sent both in the SDP exchange and again as `session.update` when the data channel opens. Elva's static voice instructions live in `src/server/prompts/elva.md`; the server appends the configured coding provider and current project context at runtime.
 
 | Tool | What it does | Approval | Needs a project |
@@ -88,12 +94,12 @@ The session instructions tell Elva to prefer the fast read-only tools when they 
 
 Project scoping is enforced server-side: with no project selected, all six workspace tools return `No project is selected.` and do nothing. Paths are resolved inside the selected project only, so absolute paths and `../` traversal are rejected or clamped.
 
-> ⚠️ `run_tests` is the one tool the model can trigger that executes a command with no approval step. It runs the same command as the `TESTS` button, in the selected project. If your test command has side effects, set `TEST_COMMAND` to something safe or expect that saying "Elva, run the tests" will run it.
+> ⚠️ `run_tests` executes the selected project's configured command without an approval step. MCP tools also execute without prompting when their configured policy is `allow`; local MCP servers run user-trusted executables. Configure permissions and test commands accordingly.
 
 Confirm what the model actually received by looking for this line in the connection log:
 
 ```
-Realtime tools registered: coding_task, workspace_status, search_workspace, read_file, git_diff, run_tests, propose_patch, web_search.
+Realtime tools registered: mcp_list, mcp_call, coding_task, workspace_status, search_workspace, read_file, git_diff, run_tests, propose_patch, web_search.
 ```
 
 ---
@@ -773,6 +779,13 @@ This application is a **local-development prototype**. Register only repositorie
 
 ---
 
+## Roadmap
+1. [x] Add MCP connectivity allowing any MCP to connect — implemented; see [configuration and supported capabilities](docs/mcp.md).
+2. Add Computer Use tool (i like hermes agent implementation please consider that)
+3. Add Ability to listen and respond to other participants on zoom and teams meeting, might need to join as a participant.
+
+
+---
 ## License and Notes
 
 - This is experimental code and is not intended for production use.
