@@ -1,0 +1,11 @@
+[req]
+distinguished_name = distinguished
+x509_extensions = extensions
+prompt = no
+[distinguished]
+CN = elva-local-meeting
+[extensions]
+subjectAltName = DNS:localhost,DNS:host.docker.internal,IP:127.0.0.1
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,digitalSignature,keyEncipherment,keyCertSign
+extendedKeyUsage = serverAuth

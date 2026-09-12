@@ -1940,3 +1940,7 @@ h2 {
     letter-spacing: 0.3em;
   }
 }
+.meeting-panel { display: grid; gap: 10px; margin: 12px 0; }
+.meeting-panel label { display: grid; gap: 6px; font-size: 12px; }
+.meeting-panel input, .meeting-panel select { width: 100%; padding: 10px; color: inherit; background: var(--panel, #121820); border: 1px solid var(--border, #34404d); border-radius: 6px; }
+.meeting-panel p { margin: 0; font-size: 12px; opacity: 0.8; }

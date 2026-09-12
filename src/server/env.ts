@@ -1,5 +1,8 @@
 import path from "node:path";
 import { parseCodingAgentName } from "./codingAgent";
+import { parseTeamsOptions } from "./meeting/options";
+
+const meetingOptions = parseTeamsOptions(["--name", process.env.ELVA_MEETING_NAME ?? "Elva AI assistant", "--duration", process.env.ELVA_MEETING_DURATION ?? "120"]);
 
 // Codex `model_provider` from ~/.codex/config.toml, passed as `codex app-server -c model_provider=<name>`.
 // `--profile` cannot be used: codex-cli restricts it to runtime commands and rejects it for app-server.
@@ -25,6 +28,11 @@ if (process.env.CODEX_PROFILE?.trim()) {
 }
 
 export const env = {
+  mode: process.env.ELVA_MODE === "teams" ? "teams" as const : "local" as const,
+  initialWorkspace: process.env.ELVA_INITIAL_WORKSPACE,
+  meetingUrl: process.env.ELVA_MEETING_URL ?? "",
+  meetingName: meetingOptions.name,
+  meetingDurationMinutes: meetingOptions.durationMinutes,
   mcpConfigPath: path.resolve(process.env.MCP_CONFIG_FILE ?? path.join(process.cwd(), ".voice-pair-programmer", "mcp.json")),
   port: Number(process.env.PORT ?? 8787),
   defaultWorkspaceRoot: path.resolve(process.env.WORKSPACE_ROOT ?? process.cwd()),

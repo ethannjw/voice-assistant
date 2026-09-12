@@ -3,6 +3,7 @@ import { CODING_TASK_HEARTBEAT_MS } from "../constants";
 import { formatCodingTaskHeader } from "../lib/format";
 import type { CodingTaskHeaderState, LogRole } from "../types";
 import type { CodingAgentName, PendingPatch, ToolResult } from "../../shared/contracts";
+import type { RealtimeChannel } from "../lib/realtimeChannel";
 
 type RefCell<T> = {
   current: T;
@@ -13,9 +14,9 @@ type Options = {
   updateLog: (id: string, text: string) => void;
   onPendingPatch: (patch: PendingPatch) => void;
   codingAgentRef: RefCell<CodingAgentName | null>;
-  dataChannelRef: RefCell<RTCDataChannel | null>;
+  dataChannelRef: RefCell<RealtimeChannel | null>;
   conversationRevisionRef: RefCell<number>;
-  onRealtimeResult: (channel: RTCDataChannel, callId: string, result: ToolResult, interrupted: boolean) => void;
+  onRealtimeResult: (channel: RealtimeChannel, callId: string, result: ToolResult, interrupted: boolean) => void;
 };
 
 function parseToolArguments(rawArgs: string): Record<string, unknown> {

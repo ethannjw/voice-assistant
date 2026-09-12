@@ -9,6 +9,7 @@ import { ToastStack } from "./components/ToastStack";
 import { Topbar } from "./components/Topbar";
 import { VoicePanel } from "./components/VoicePanel";
 import { McpPanel } from "./components/McpPanel";
+import { MeetingPanel } from "./components/MeetingPanel";
 import { useCodexApprovals } from "./hooks/useCodexApprovals";
 import { useConfirmDialog } from "./hooks/useConfirmDialog";
 import { useConversationLogs } from "./hooks/useConversationLogs";
@@ -28,6 +29,9 @@ export function App() {
     return isVoiceStyleId(saved) ? saved : "natural";
   });
   const [input, setInput] = useState("");
+  const [mode, setMode] = useState<"local" | "teams">("local");
+  const [meetingUrl, setMeetingUrl] = useState("");
+  const startupModeLoaded = useRef(false);
   const [micPermissionError, setMicPermissionError] = useState("");
   const codingAgentRef = useRef<CodingAgentName | null>(null);
 
@@ -76,7 +80,7 @@ export function App() {
   const approvals = useCodexApprovals({ onSystemLog });
 
   const projects = useProjectManager({
-    isConnected: realtime.isConnected,
+    isConnected: realtime.isConnected || realtime.status === "connecting",
     disconnect: realtime.disconnect,
     requestConfirm,
     onSystemLog,
@@ -88,14 +92,21 @@ export function App() {
 
   useEffect(() => {
     codingAgentRef.current = projects.config?.codingAgent ?? null;
-  }, [projects.config?.codingAgent]);
+    if (projects.config && !startupModeLoaded.current) {
+      startupModeLoaded.current = true;
+      setMode(projects.config.meeting?.mode ?? "local");
+      setMeetingUrl(projects.config.meeting?.url ?? "");
+    }
+  }, [projects.config]);
+
+  const connectCurrent = () => void realtime.connect(mode === "teams" ? meetingUrl : undefined);
 
   useKeyboardShortcuts({
     status: realtime.status,
     approvals: approvals.approvals,
     activeApprovalIndex: approvals.activeIndex,
     setActiveApprovalIndex: approvals.setActiveIndex,
-    onConnect: () => void realtime.connect(),
+    onConnect: connectCurrent,
     onDisconnect: realtime.disconnect,
     onClearLogs: clearLogs,
     onSendText: () => {
@@ -147,13 +158,17 @@ export function App() {
           onAddCandidate={projects.addCandidate}
         />
 
+        <MeetingPanel mode={mode} url={meetingUrl} status={realtime.meetingStatus} active={realtime.isConnected || realtime.status === "connecting"} onMode={setMode} onUrl={setMeetingUrl} />
+
         <ControlsBar
+          meeting={mode === "teams"}
+          connecting={realtime.status === "connecting"}
           isConnected={realtime.isConnected}
           muted={realtime.muted}
           hasProject={hasProject}
           micLevel={micLevel}
           micPermissionError={micPermissionError}
-          onConnect={() => void realtime.connect()}
+          onConnect={connectCurrent}
           onDisconnect={realtime.disconnect}
           onToggleMute={realtime.toggleMute}
           onInspect={() => void realtime.executeToolCall("workspace_status", null, "{}")}
@@ -161,7 +176,7 @@ export function App() {
         />
 
         <McpPanel />
-        <VoicePanel voiceStyle={voiceStyle} onChange={setVoiceStyle} />
+        {mode === "local" ? <VoicePanel voiceStyle={voiceStyle} onChange={setVoiceStyle} /> : null}
 
         <PromptRow
           value={input}
