@@ -1,0 +1,62 @@
+x-runtime: &runtime
+  image: ${ATTENDEE_IMAGE:-elva-attendee:31ebd91}
+  platform: linux/amd64
+  env_file: ${ELVA_MEETING_STATE}/runtime.env
+  environment:
+    DJANGO_SETTINGS_MODULE: local_settings
+    PYTHONPATH: /elva:/attendee:/usr/lib/python3/dist-packages
+    ELVA_NO_CLOUD: "1"
+    SAVE_DEBUG_RECORDINGS: "false"
+    AWS_CONFIG_FILE: /dev/null
+    AWS_SHARED_CREDENTIALS_FILE: /dev/null
+    AWS_EC2_METADATA_DISABLED: "true"
+    SENTRY_DSN: ""
+    POSTGRES_HOST: postgres
+    REDIS_URL: redis://redis:6379/5
+    ALLOWED_HOSTS: localhost,127.0.0.1,app
+    ENABLE_CHROME_SANDBOX: "false"
+  volumes:
+    - ./runtime:/elva:ro
+    - ${ELVA_MEETING_STATE}/public:/session:ro
+  cpus: 3
+  mem_limit: 3g
+  shm_size: 512m
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 256
+services:
+  postgres:
+    image: postgres:15.3-alpine
+    environment:
+      POSTGRES_DB: attendee_development
+      POSTGRES_USER: attendee_development_user
+      POSTGRES_PASSWORD: attendee_development_user
+    tmpfs: [/var/lib/postgresql/data]
+    mem_limit: 512m
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U attendee_development_user -d attendee_development"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:7-alpine
+    command: [redis-server, --save, "", --appendonly, "no"]
+    mem_limit: 128m
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  app:
+    <<: *runtime
+    entrypoint: []
+    command: [python, manage.py, check]
+  bot:
+    <<: *runtime
+    command: [python, /elva/meeting.py]
+    networks: [default, meeting-egress]
+    stdin_open: true
+networks:
+  default:
+    internal: true
+  meeting-egress: {}

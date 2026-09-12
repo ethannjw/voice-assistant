@@ -6,6 +6,7 @@ import { isExplicitCodingInterruptionRequest } from "../lib/intent";
 import type { AttentionState, ConnectionStatus, RealtimeEvent, VoiceStyleId } from "../types";
 import type { CodingAgentName, PendingPatch, ToolResult } from "../../shared/contracts";
 import { useCodexToolExecution } from "./useCodexToolExecution";
+import { MeetingChannel, type RealtimeChannel } from "../lib/realtimeChannel";
 
 type Logger = (message: string) => void;
 
@@ -39,9 +40,12 @@ export function useRealtimeSession({
   const [isDataChannelOpen, setIsDataChannelOpen] = useState(false);
   const [isTextSubmitting, setIsTextSubmitting] = useState(false);
   const [attentionState, setAttentionState] = useState<AttentionState>("waiting");
+  const [meetingStatus, setMeetingStatus] = useState("");
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
-  const dcRef = useRef<RTCDataChannel | null>(null);
+  const dcRef = useRef<RealtimeChannel | null>(null);
+  const connectGenerationRef = useRef(0);
+  const connectionStartedRef = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const playbackAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -53,7 +57,7 @@ export function useRealtimeSession({
   const attentionReadyRef = useRef(false);
   const confirmationTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mutedRef = useRef(false);
-  const onRealtimeResult = useCallback((channel: RTCDataChannel, callId: string, result: ToolResult, interrupted: boolean) => {
+  const onRealtimeResult = useCallback((channel: RealtimeChannel, callId: string, result: ToolResult, interrupted: boolean) => {
     if (dcRef.current === channel) attentionRef.current?.finishToolCall(callId, result, interrupted);
   }, []);
   const { abortCodexTasks, clearAbortControllers, executeToolCall } = useCodexToolExecution({
@@ -181,6 +185,12 @@ export function useRealtimeSession({
 
   const handleRealtimeEvent = useCallback(
     async (event: RealtimeEvent) => {
+      if (event.type === "elva.meeting.status") {
+        const state = (event as RealtimeEvent & {state: string}).state;
+        setMeetingStatus(state);
+        addLog("system", state);
+        return;
+      }
       if (attentionRef.current?.handleEvent(event)) return;
       if (event.type === "error") {
         const message = event.error?.message ?? "GPT-Realtime-2 voice session error.";
@@ -218,6 +228,8 @@ export function useRealtimeSession({
   // ---------- Connect / disconnect ----------
 
   const disconnect = useCallback(() => {
+    connectionStartedRef.current = false;
+    connectGenerationRef.current++;
     attentionReadyRef.current = false;
     clearTimeout(confirmationTimerRef.current);
     attentionRef.current?.dispose();
@@ -244,40 +256,52 @@ export function useRealtimeSession({
     setStatus("disconnected");
   }, [abortCodexTasks, cleanupRemoteAudio, clearAbortControllers, onMicStreamEnded]);
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (meetingUrl?: string) => {
+    connectionStartedRef.current = true;
+    const generation = ++connectGenerationRef.current;
+    const inMeeting = meetingUrl !== undefined;
     setStatus("connecting");
+    setMeetingStatus(inMeeting ? "Connecting" : "");
 
     try {
-      preparePlaybackAudio();
-      await warmVoiceEffects(voiceStyle);
-      const pc = new RTCPeerConnection();
-      pcRef.current = pc;
-      pc.onconnectionstatechange = () => {
-        if (pcRef.current === pc && pc.connectionState === "failed") {
-          disconnect();
-          setStatus("error");
-          onSystemLog("Realtime audio connection failed. Disconnect and reconnect the session.");
+      let stream: MediaStream | undefined;
+      let pc: RTCPeerConnection | undefined;
+      if (!inMeeting) {
+        preparePlaybackAudio();
+        await warmVoiceEffects(voiceStyle);
+        if (generation !== connectGenerationRef.current) return;
+        pc = new RTCPeerConnection();
+        pcRef.current = pc;
+        pc.onconnectionstatechange = () => {
+          if (pcRef.current === pc && pc.connectionState === "failed") {
+            disconnect();
+            setStatus("error");
+            onSystemLog("Realtime audio connection failed. Disconnect and reconnect the session.");
+          }
+        };
+
+        pc.ontrack = (event) => {
+          if (pcRef.current !== pc) return;
+          const remoteStream = event.streams[0] ?? new MediaStream([event.track]);
+          remoteStreamRef.current = remoteStream;
+          if (attentionReadyRef.current) void connectRemoteAudio(remoteStream, voiceStyle);
+        };
+
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (micError) {
+          if (generation !== connectGenerationRef.current) return;
+          onMicError(micError instanceof Error ? micError.message : String(micError));
+          throw micError;
         }
-      };
-
-      pc.ontrack = (event) => {
-        if (pcRef.current !== pc) return;
-        const remoteStream = event.streams[0] ?? new MediaStream([event.track]);
-        remoteStreamRef.current = remoteStream;
-        if (attentionReadyRef.current) void connectRemoteAudio(remoteStream, voiceStyle);
-      };
-
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch (micError) {
-        onMicError(micError instanceof Error ? micError.message : String(micError));
-        throw micError;
+        if (generation !== connectGenerationRef.current) {stream.getTracks().forEach(track => track.stop()); pc.close(); return;}
+        streamRef.current = stream;
+        stream.getAudioTracks().forEach((track) => { track.enabled = false; });
+        const localStream = stream;
+        const localConnection = pc;
+        localStream.getTracks().forEach((track) => localConnection.addTrack(track, localStream));
+        onMicStreamReady(stream);
       }
-      streamRef.current = stream;
-      stream.getAudioTracks().forEach((track) => { track.enabled = false; });
-      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-      onMicStreamReady(stream);
 
       // Re-apply instructions + tools over the data channel: some Realtime endpoints and relays
       // ignore the `session` part of the SDP exchange, which leaves the model without coding_task.
@@ -286,8 +310,24 @@ export function useRealtimeSession({
         throw new Error(`Failed to load the Realtime session config: ${await formatApiError(sessionResponse)}`);
       }
       const sessionUpdate: unknown = await sessionResponse.json();
+      if (generation !== connectGenerationRef.current) return;
 
-      const dc = pc.createDataChannel("oai-events");
+      let dc: RTCDataChannel | MeetingChannel;
+      if (inMeeting) {
+        const response = await fetch("/api/meeting/start", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({meetingUrl})});
+        if (!response.ok) throw new Error(await formatApiError(response));
+        const connection = await response.json() as {token: string; path: string};
+        if (generation !== connectGenerationRef.current) {
+          await fetch("/api/meeting/stop", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({token: connection.token})});
+          return;
+        }
+        const address = new URL(connection.path, window.location.href);
+        address.protocol = address.protocol === "https:" ? "wss:" : "ws:";
+        dc = new MeetingChannel(new WebSocket(address, ["elva-control", connection.token]));
+      } else {
+        if (generation !== connectGenerationRef.current) {stream?.getTracks().forEach(track => track.stop()); pc?.close(); return;}
+        dc = pc!.createDataChannel("oai-events");
+      }
       dcRef.current = dc;
       attentionRef.current?.dispose();
       attentionRef.current = new ConversationAttention({
@@ -298,10 +338,10 @@ export function useRealtimeSession({
           if (dcRef.current !== dc) return;
           clearTimeout(confirmationTimerRef.current);
           attentionReadyRef.current = true;
-          stream.getAudioTracks().forEach((track) => { track.enabled = !mutedRef.current; });
+          stream?.getAudioTracks().forEach((track) => { track.enabled = !mutedRef.current; });
           if (remoteStreamRef.current) void connectRemoteAudio(remoteStreamRef.current, voiceStyle);
           setStatus("connected");
-          addLog("system", "GPT-Realtime-2 voice session connected. Waiting for Elva to be addressed; clear follow-ups do not need her name.");
+          addLog("system", `${inMeeting ? "Teams audio session" : "GPT-Realtime-2 voice session"} connected. Waiting for Elva to be addressed; clear follow-ups do not need her name.`);
         },
         onUnsafeSession: () => {
           onRealtimeError("Realtime did not confirm manual response control. Elva disconnected to avoid unsolicited replies.");
@@ -324,7 +364,7 @@ export function useRealtimeSession({
             disconnect();
             setStatus("error");
           }
-        }, 10_000);
+        }, inMeeting ? 25_000 : 10_000);
         try {
           dc.send(JSON.stringify(sessionUpdate));
         } catch (error) {
@@ -343,9 +383,12 @@ export function useRealtimeSession({
         setStatus("error");
       };
       dc.onmessage = (message) => {
-        if (dcRef.current === dc) void handleRealtimeEvent(JSON.parse(message.data));
+        if (dcRef.current === dc) {
+          try {void handleRealtimeEvent(JSON.parse(message.data));} catch {disconnect(); setStatus("error");}
+        }
       };
 
+      if (!pc) return;
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
@@ -364,6 +407,7 @@ export function useRealtimeSession({
         sdp: await sdpResponse.text()
       });
     } catch (error) {
+      if (generation !== connectGenerationRef.current) return;
       const message = error instanceof Error ? error.message : String(error);
       disconnect();
       setStatus("error");
@@ -394,12 +438,24 @@ export function useRealtimeSession({
     }
   }, [applyVoiceStyleEffect, voiceStyle]);
 
+  const disconnectRef = useRef(disconnect);
+  disconnectRef.current = disconnect;
+  useEffect(() => {
+    const leave = () => {if (connectionStartedRef.current) disconnectRef.current();};
+    window.addEventListener("pagehide", leave);
+    return () => {
+      window.removeEventListener("pagehide", leave);
+      leave();
+    };
+  }, []);
+
   // ---------- Public actions ----------
 
   const toggleMute = useCallback(() => {
     setMuted((current) => {
       const next = !current;
       mutedRef.current = next;
+      if (dcRef.current instanceof MeetingChannel && dcRef.current.readyState === "open") dcRef.current.send(JSON.stringify({type: "elva.mute", muted: next}));
       streamRef.current?.getAudioTracks().forEach((track) => {
         track.enabled = attentionReadyRef.current && !next;
       });
@@ -444,6 +500,7 @@ export function useRealtimeSession({
 
   return {
     status,
+    meetingStatus,
     attentionState,
     isConnected: status === "connected",
     isDataChannelOpen,

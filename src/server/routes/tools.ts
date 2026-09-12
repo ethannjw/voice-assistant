@@ -3,12 +3,23 @@ import type { ProjectConfig, ToolName } from "../../shared/contracts";
 import { createRequestAbortController } from "../lib/abortController";
 import { runWebSearch, type WebSearchResult } from "../webSearch";
 import type { RouteDeps } from "./index";
+import { guardMcpRequest } from "./mcp";
+import { listMcp } from "../mcp/gateway";
 
 export function mountToolRoutes(
   app: Express,
-  { tools, codingAgent, projectStore, firecrawlBaseUrl }: RouteDeps
+  { tools, codingAgent, projectStore, firecrawlBaseUrl, mcp }: RouteDeps
 ) {
   app.post("/api/tools/:name", async (req, res) => {
+    if (req.params.name === "mcp_list" || req.params.name === "mcp_call") {
+      let trusted = false;
+      guardMcpRequest(req, res, () => { trusted = true; });
+      if (!trusted) return;
+      const signal = createRequestAbortController(req, res).signal;
+      const result = req.params.name === "mcp_list" ? await listMcp(mcp, req.body ?? {}, signal) : await mcp.call(req.body, signal);
+      if (!signal.aborted && !res.writableEnded) res.json(result);
+      return;
+    }
     if (req.params.name === "coding_task" || req.params.name === "codex_task") {
       const task = typeof req.body?.task === "string" ? req.body.task.trim() : "";
       if (!task) {

@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server/index.ts",
+    "teams": "tsx src/server/teams.ts",
+    "meeting:check": "tsx src/server/meeting/check.ts",
+    "meeting:build": "python3 integrations/attendee/build.py",
     "build": "tsc && vite build",
     "start": "NODE_ENV=production tsx src/server/index.ts",
     "typecheck": "tsc --noEmit",
@@ -25,6 +28,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.4.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@vitejs/plugin-react": "^5.0.0",
     "dotenv": "^16.4.7",
     "express": "^5.1.0",
@@ -33,13 +37,15 @@
     "react-dom": "^19.1.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
-    "vite": "^7.0.0"
+    "vite": "^7.0.0",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.0",
     "@types/react": "^19.1.0",
-    "@types/react-dom": "^19.1.0"
+    "@types/react-dom": "^19.1.0",
+    "@types/ws": "^8.18.1"
   }
 }

@@ -51,6 +51,7 @@ export type ProjectConfig = {
 };
 
 export type AppConfig = {
+  meeting?: { mode: "local" | "teams"; url: string; name: string; durationMinutes: number };
   activeProject: ProjectConfig | null;
   projects: ProjectConfig[];
   realtimeModel: string;

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { ToolName } from "../shared/contracts";
 import type { CodingAgentName } from "../shared/contracts";
+import { MCP_REALTIME_TOOLS } from "./mcp/gateway";
 
 const ELVA_PROMPT = readFileSync(
   fileURLToPath(new URL("./prompts/elva.md", import.meta.url)),
@@ -9,6 +10,7 @@ const ELVA_PROMPT = readFileSync(
 ).trim();
 
 export const REALTIME_TOOLS = [
+  ...MCP_REALTIME_TOOLS,
   {
     type: "function",
     name: "coding_task",
@@ -231,6 +233,7 @@ function formatProjectInstruction(activeProject: RealtimeProjectContext) {
       "Current application project state: no project is selected.",
       `Do not call these tools until a project is selected: ${PROJECT_SCOPED_REALTIME_TOOLS.join(", ")}.`,
       "web_search still works without a project.",
+      "mcp_list and mcp_call also work without a project, using the user's configured MCP servers.",
       "If the user requests coding work, briefly explain that selecting or creating a project is required while normal voice chat can continue. Do not repeat this unless it is relevant to a new request."
     ].join(" ");
   }

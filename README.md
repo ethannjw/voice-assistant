@@ -71,6 +71,12 @@ The same local tools are registered with the Realtime model, so you can also ask
 
 ## Realtime Tools
 
+### User-configurable MCP servers
+
+Open **Manage MCP servers** to import or edit standard `mcpServers` JSON. Elva supports local stdio, remote Streamable HTTP, legacy SSE, OAuth, tool discovery/execution, resources, prompts, and user-controlled permissions. No service-specific adapter is required. See [MCP configuration and protocol support](docs/mcp.md) for setup, security boundaries, and the exact supported capabilities.
+
+`mcp_list` and `mcp_call` work without selecting a repository. Full access is the default for configured servers; use server/tool policies to ask or deny. GitHub command tooling is separate.
+
 Every tool the application implements is registered with the Realtime session, so Elva can answer directly instead of routing every request through the coding agent. The registry lives in `REALTIME_TOOLS` in `src/server/realtime.ts` and is sent both in the SDP exchange and again as `session.update` when the data channel opens. Elva's static voice instructions live in `src/server/prompts/elva.md`; the server appends the configured coding provider and current project context at runtime.
 
 | Tool | What it does | Approval | Needs a project |
@@ -88,12 +94,12 @@ The session instructions tell Elva to prefer the fast read-only tools when they 
 
 Project scoping is enforced server-side: with no project selected, all six workspace tools return `No project is selected.` and do nothing. Paths are resolved inside the selected project only, so absolute paths and `../` traversal are rejected or clamped.
 
-> ⚠️ `run_tests` is the one tool the model can trigger that executes a command with no approval step. It runs the same command as the `TESTS` button, in the selected project. If your test command has side effects, set `TEST_COMMAND` to something safe or expect that saying "Elva, run the tests" will run it.
+> ⚠️ `run_tests` executes the selected project's configured command without an approval step. MCP tools also execute without prompting when their configured policy is `allow`; local MCP servers run user-trusted executables. Configure permissions and test commands accordingly.
 
 Confirm what the model actually received by looking for this line in the connection log:
 
 ```
-Realtime tools registered: coding_task, workspace_status, search_workspace, read_file, git_diff, run_tests, propose_patch, web_search.
+Realtime tools registered: mcp_list, mcp_call, coding_task, workspace_status, search_workspace, read_file, git_diff, run_tests, propose_patch, web_search.
 ```
 
 ---
@@ -444,7 +450,62 @@ An accepted new request may interrupt Elva's current reply. To cancel coding wor
 
 Attention checks add model usage and a response delay. They are semantic model decisions, not perfect speaker/addressee detection. Invalid, failed, expired, or stale decisions fail closed. The app disconnects if manual response control cannot be confirmed. Typed messages are explicit invitations and bypass the silent classifier.
 
-**Waiting for Elva does not mute the microphone:** audio still reaches the configured Realtime service for context and attention checks. Use **MUTE** or **DISCONNECT** to stop microphone transmission. This implementation uses the browser microphone only; Zoom/Teams call capture, speaker identification, and routing Elva's voice into a call are not implemented yet.
+**Waiting for Elva does not mute incoming audio:** audio still reaches the configured Realtime service for context and attention checks. Use **MUTE** to stop forwarding input, or **DISCONNECT / Leave meeting** to end the session. Normal mode uses the browser microphone; Teams mode uses meeting audio. Speaker identification is not implemented.
+
+## Normal and Teams Modes
+
+Both modes use the same Elva harness: selected project, workspace tools, configured MCP servers, coding agent, attention gating, approvals, and conversation UI. Teams mode changes the audio source and destination, not the agent or its permissions.
+
+**Normal mode** uses your local microphone and speakers as before:
+
+```bash
+npm run dev
+```
+
+**Teams mode** accepts the meeting URL and an optional initial project folder:
+
+```bash
+npm run teams -- --meeting-url 'https://teams.microsoft.com/meet/MEETING_ID?p=PASSCODE' --workspace /path/to/project
+```
+
+Open the printed local UI address (default `http://localhost:8787`), review the project and permissions, and click **Join meeting**. Admit **Elva AI assistant** from the lobby if required. Wait for the meeting status to indicate she has joined before addressing her. Keep this UI open for tools and approvals; **Leave meeting**, closing the tab, or stopping the server ends participation. No meeting is joined merely by starting the CLI.
+
+To avoid putting the meeting URL in shell history/process arguments, omit `--meeting-url` and enter it at the interactive prompt. The app does not save the URL in its configuration files. You can also start normally and select **Teams meeting** in the UI, or disconnect and switch back to **Normal — local microphone**.
+
+Additional CLI parameters: `--port 8788`, `--name 'Elva AI assistant'`, and `--duration 120` (minutes, default two hours, maximum 24 hours). Only one meeting is active per app instance. A second instance needs a separate port; its project store is shared unless you also set `PROJECTS_FILE`. Use `npm run teams -- --help` for help.
+
+### Folders and Live Transcripts
+
+- `--workspace /path/to/project` selects an existing folder through the normal project manager. You can add/switch folders in the existing project picker; switching while connected requires disconnecting.
+- Elva's generated spoken replies and tool results appear live in the existing conversation panel. Generated text is not proof that every word was played or heard in Teams.
+- This feature does not provide a complete, speaker-labelled meeting transcript. Incoming speech is processed for context/attention, but all-participant transcription and transcript-file export are not configured.
+- Audio and transcripts are not automatically saved by this integration. The UI's current conversation log remains in browser memory until cleared/reloaded. Coding agents and MCP servers retain their own existing storage/logging behavior.
+
+### Local Meeting Runtime
+
+Teams mode runs Attendee locally in Docker, with ephemeral Postgres and Redis. It requires Docker with Compose, Python 3, OpenSSL, and Git for building. No AWS account, SDK credentials, S3, or managed meeting-bot service is required. The existing configured Realtime provider still receives audio and may charge for usage; this is not offline inference.
+
+Build the pinned image once, then check the runtime without joining any meeting:
+
+```bash
+npm run meeting:build
+npm run meeting:check
+```
+
+Python packages install through Autodesk Artifactory only. The build pins Attendee to `31ebd91f3a318ac4bc266240b8fef3f26bec333a`, using the compatible `boto3`/`botocore` pair `1.35.99` available there. These packages satisfy upstream imports; AWS client creation and API execution are disabled at runtime. This is a regular package installation, without separate source-package availability checks.
+
+If corporate TLS inspection requires a CA certificate, use `npm run meeting:build -- --ca-cert /path/to/corporate-ca.pem`; TLS verification stays enabled. Git, Docker registry access, OS packages, and upstream browser assets also need normal network access. The script does not install host tools. Set `ATTENDEE_IMAGE` to use another locally built compatible image; the default is `elva-attendee:31ebd91`.
+
+The UI/control server listens on loopback. Audio uses a per-session authenticated TLS bridge; credentials remain server-side. Private temporary state and uniquely named `elva-meeting-*` Compose resources are removed on normal shutdown. If Docker is unavailable during cleanup or the host crashes, inspect `docker compose ls --all` for leftover `elva-meeting-*` projects before restarting; do not remove unrelated containers. Cleanup failures retain the private temporary state directory for recovery.
+
+### Meeting Permissions and Limits
+
+- Obtain participant consent and keep Elva visibly identified as an AI assistant. Meeting speech is sent to the configured Realtime provider even while Elva waits for an invitation, unless input is muted.
+- Meeting participants can address Elva and request the same configured tools. Attention gating is **not speaker authentication**. Review MCP permissions, the selected repository, and tools that run without approval before joining an untrusted meeting.
+- Existing coding approvals still appear in the same UI. MCP policies are unchanged; meeting mode adds no blanket approval bypass.
+- The configured provider voice is shared. Browser-local voice effects apply only in normal mode, not to Teams output.
+- Teams lobby admission and tenant guest-access policies still apply; this does not bypass organization controls. Zoom support remains pending.
+- Automated tests cover shared tools, transcripts, PCM routing, transport authorization, manual-response confirmation and disconnect cleanup. Packaged runtime safety checks pass without joining. The earlier live Teams audio test used the standalone integration; the newly integrated shared-UI flow still needs a live meeting acceptance test.
 
 ---
 
@@ -773,6 +834,13 @@ This application is a **local-development prototype**. Register only repositorie
 
 ---
 
+## Roadmap
+1. [x] Add MCP connectivity allowing any MCP to connect — implemented; see [configuration and supported capabilities](docs/mcp.md).
+2. [ ] Join Zoom and Microsoft Teams meetings as Elva, listen to participants, and respond — Teams mode is implemented with the shared harness; integrated live acceptance and Zoom support remain. See [Normal and Teams Modes](#normal-and-teams-modes) and [meeting participation research](docs/research/2026-09-09-meeting-participation.md).
+3. [ ] Add Computer Use tool, considering the Hermes agent implementation — deferred until after meeting participation.
+
+
+---
 ## License and Notes
 
 - This is experimental code and is not intended for production use.

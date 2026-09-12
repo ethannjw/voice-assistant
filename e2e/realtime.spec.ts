@@ -16,6 +16,8 @@ type RealtimeSessionUpdate = {
 
 /** Every workspace tool plus the two delegation tools, in registration order. */
 const EXPECTED_REALTIME_TOOL_NAMES = [
+  "mcp_list",
+  "mcp_call",
   "coding_task",
   "workspace_status",
   "search_workspace",

@@ -56,6 +56,7 @@ export default defineConfig({
         OPENAI_API_KEY: "e2e-not-used",
         OPENAI_BASE_URL: "http://127.0.0.1:1",
         PROJECTS_FILE: path.join(e2eRoot, "projects.json"),
+        MCP_CONFIG_FILE: path.join(e2eRoot, "mcp.json"),
         WORKSPACE_ROOT: path.join(e2eRoot, "unused-default"),
         NO_PROJECT_WORKSPACE: path.join(e2eRoot, "no-project"),
         FIRECRAWL_BASE_URL: firecrawlBaseUrl,

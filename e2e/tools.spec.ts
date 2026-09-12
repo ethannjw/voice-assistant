@@ -13,7 +13,9 @@ const COVERED_TOOL_NAMES = [
   "propose_patch",
   "coding_task",
   "codex_task",
-  "web_search"
+  "web_search",
+  "mcp_list",
+  "mcp_call"
 ] as const;
 
 async function callTool(

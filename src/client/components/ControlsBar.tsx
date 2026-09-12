@@ -1,6 +1,8 @@
 import { GitPullRequest, Mic, MicOff, Phone, PhoneOff, Play } from "lucide-react";
 
 type Props = {
+  meeting?: boolean;
+  connecting?: boolean;
   isConnected: boolean;
   muted: boolean;
   hasProject: boolean;
@@ -14,6 +16,8 @@ type Props = {
 };
 
 export function ControlsBar({
+  meeting = false,
+  connecting = false,
   isConnected,
   muted,
   hasProject,
@@ -28,15 +32,15 @@ export function ControlsBar({
   return (
     <>
       <div className="controls">
-        {!isConnected ? (
+        {!isConnected && !connecting ? (
           <button className="primary" type="button" onClick={onConnect} title="Connect (⌘D)">
             <Phone size={18} />
-            Connect
+            {meeting ? "Join meeting" : "Connect"}
           </button>
         ) : (
           <button className="danger" type="button" onClick={onDisconnect} title="Disconnect (⌘D)">
             <PhoneOff size={18} />
-            Disconnect
+            {meeting ? "Leave meeting" : "Disconnect"}
           </button>
         )}
         <button type="button" onClick={onToggleMute} disabled={!isConnected} title="Mute (Space)">
@@ -51,11 +55,11 @@ export function ControlsBar({
           <Play size={18} />
           Tests
         </button>
-        {isConnected ? <MicMeter micLevel={micLevel} muted={muted} /> : null}
+        {isConnected && !meeting ? <MicMeter micLevel={micLevel} muted={muted} /> : null}
       </div>
       {muted && isConnected ? (
         <div className="mic-banner">
-          <MicOff size={12} /> MIC MUTED — press Space to unmute
+          <MicOff size={12} /> {meeting ? "MEETING INPUT MUTED" : "MIC MUTED"} — press Space to unmute
         </div>
       ) : null}
       {micPermissionError ? <div className="mic-banner">⚠ MIC ERROR: {micPermissionError}</div> : null}

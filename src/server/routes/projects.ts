@@ -2,7 +2,11 @@ import type { Express } from "express";
 import { discoverRepositories } from "../lib/discoverRepositories";
 import type { RouteDeps } from "./index";
 
-export function mountProjectRoutes(app: Express, { projectStore, tools }: RouteDeps) {
+export function mountProjectRoutes(app: Express, { projectStore, tools, mcp }: RouteDeps) {
+  app.use("/api/projects", (req, res, next) => {
+    if (req.method !== "GET") res.once("finish", () => { if (res.statusCode < 400) void mcp.rootsChanged(); });
+    next();
+  });
   app.get("/api/projects", (_req, res) => {
     res.json({
       activeProject: projectStore.getActiveProject(),
